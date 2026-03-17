@@ -1,6 +1,7 @@
 #include "material_simulator_native.h"
 #include <climits>
 #include <godot_cpp/variant/aabb.hpp>
+#include <godot_cpp/variant/utility_functions.hpp>
 
 using namespace godot;
 
@@ -719,32 +720,64 @@ void MaterialSimulatorNative::_deplete_adjacent_source(int wx, int wy, int wz, u
 
 	int cx = wx, cy = wy, cz = wz;
 	int cur_lvl = (int)flvl(mid(_read_raw(cx, cy, cz)));
+	int min_y = INT_MIN; // raised after a waterfall escape to prevent backtracking
 
-	for (int step = 0; step <= FLUID_LEVELS; step++) {
+	UtilityFunctions::print(String("[DEPLETE] start=({0},{1},{2}) lvl={3} base={4}").format(
+		Array::make(wx, wy, wz, cur_lvl, (int)base)));
+
+	for (int step = 0; step < FLUID_LEVELS + CHUNK_Y; step++) {
 		int best_lvl = cur_lvl;
 		int bx = cx, by = cy, bz = cz;
+		// Track the best upward neighbor separately for waterfall escape.
+		bool found_upward = false;
+		int ux = cx, uy = cy, uz = cz, ul = -1;
 
 		for (int i = 0; i < 10; i++) {
 			int nx = cx + dirs[i][0], ny = cy + dirs[i][1], nz = cz + dirs[i][2];
+			if (ny < min_y) continue; // never backtrack below edge after waterfall escape
 			uint8_t nr = _read_raw(nx, ny, nz);
 			uint8_t ni = mid(nr);
 			if (!is_fluid(ni) || fbase(ni) != base) continue;
 
 			if (src(nr)) {
 				uint8_t lvl = flvl(ni);
+				UtilityFunctions::print(String("[DEPLETE] found source at ({0},{1},{2}) lvl={3} after {4} steps").format(
+					Array::make(nx, ny, nz, (int)lvl, step)));
 				_write_next_if_unchanged(nx, ny, nz,
 						(lvl == 0) ? MAT_AIR : mkfluid(base, lvl - 1, true));
 				return;
 			}
 
 			int nl = (int)flvl(ni);
-			if (nl > best_lvl) { best_lvl = nl; bx = nx; by = ny; bz = nz; }
+			// Record best upward neighbor for potential waterfall escape.
+			if (dirs[i][1] > 0 && nl > ul) { ul = nl; ux = nx; uy = ny; uz = nz; found_upward = true; }
+			// Normal uphill or within-waterfall-column climb.
+			bool upward_at_max = (dirs[i][1] > 0 && nl == FLUID_LEVELS - 1 && cur_lvl == FLUID_LEVELS - 1);
+			if (nl > best_lvl || upward_at_max) { best_lvl = nl; bx = nx; by = ny; bz = nz; }
 		}
 
-		if (bx == cx && by == cy && bz == cz) return; // local maximum, no source reachable
+		UtilityFunctions::print(String("[DEPLETE] step={0} at ({1},{2},{3}) lvl={4} -> best ({5},{6},{7}) lvl={8}").format(
+			Array::make(step, cx, cy, cz, cur_lvl, bx, by, bz, best_lvl)));
+
+		if (bx == cx && by == cy && bz == cz) {
+			// Normal gradient stuck. If we're at max level, the path continues
+			// upward through the overflow/edge cell (level < 7). Escape there and
+			// set min_y so we never backtrack into the waterfall below.
+			if (cur_lvl == FLUID_LEVELS - 1 && found_upward) {
+				UtilityFunctions::print(String("[DEPLETE] waterfall escape to ({0},{1},{2}) lvl={3}").format(
+					Array::make(ux, uy, uz, ul)));
+				cx = ux; cy = uy; cz = uz;
+				cur_lvl = ul;
+				min_y = uy;
+				continue;
+			}
+			UtilityFunctions::print("[DEPLETE] STUCK - no source reachable");
+			return;
+		}
 		cx = bx; cy = by; cz = bz;
 		cur_lvl = best_lvl;
 	}
+	UtilityFunctions::print("[DEPLETE] exceeded max steps");
 }
 
 // ── Simulation functions ──
