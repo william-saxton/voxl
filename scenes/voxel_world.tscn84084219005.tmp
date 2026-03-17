@@ -1,0 +1,73 @@
+[gd_scene format=3 uid="uid://cgeyo2alrmwhv"]
+
+[ext_resource type="Script" uid="uid://cm0qqnomluk8b" path="res://scripts/isometric_camera.gd" id="camera_script"]
+[ext_resource type="Script" uid="uid://bcpih4k1yb84e" path="res://scripts/voxel_generator.gd" id="generator_script"]
+[ext_resource type="Script" uid="uid://cmv81apaae56e" path="res://scripts/voxel_interaction.gd" id="interaction_script"]
+[ext_resource type="Script" uid="uid://cib2l6da1v3y3" path="res://scripts/player.gd" id="player_script"]
+[ext_resource type="VoxelBlockyLibrary" uid="uid://0hekgoj4qr54" path="res://resources/voxel_blocky_library.tres" id="voxel_library"]
+[ext_resource type="Script" uid="uid://d06ad1q6e4c6" path="res://scripts/voxel_world_manager.gd" id="world_manager_script"]
+
+[sub_resource type="Environment" id="Environment_1"]
+background_mode = 1
+background_color = Color(0.45, 0.55, 0.7, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.6, 0.6, 0.6, 1)
+
+[sub_resource type="VoxelGeneratorScript" id="VoxelGeneratorScript_1"]
+script = ExtResource("generator_script")
+
+[sub_resource type="VoxelMesherBlocky" id="VoxelMesherBlocky_1"]
+library = ExtResource("voxel_library")
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_1"]
+radius = 2.4
+height = 8.0
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_1"]
+radius = 2.4
+height = 8.0
+
+[node name="VoxelWorld" type="Node3D" unique_id=346135610]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=232582773]
+environment = SubResource("Environment_1")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=2112894588]
+transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 20, 0)
+shadow_enabled = true
+
+[node name="VoxelTerrain" type="VoxelTerrain" parent="." unique_id=973648153]
+run_stream_in_editor = false
+generator = SubResource("VoxelGeneratorScript_1")
+mesher = SubResource("VoxelMesherBlocky_1")
+
+[node name="Player" type="CharacterBody3D" parent="." unique_id=1032389544]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 10, 0)
+script = ExtResource("player_script")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player" unique_id=357051608]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 4, 0)
+shape = SubResource("CapsuleShape3D_1")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Player" unique_id=1874439574]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 4, 0)
+mesh = SubResource("CapsuleMesh_1")
+
+[node name="VoxelViewer" type="VoxelViewer" parent="Player" unique_id=1360717522]
+
+[node name="IsometricCamera" type="Camera3D" parent="." unique_id=1617168197]
+projection = 1
+size = 40.0
+far = 400.0
+script = ExtResource("camera_script")
+target_path = NodePath("../Player")
+offset = Vector3(30, 40, 30)
+
+[node name="VoxelWorldManager" type="Node" parent="." unique_id=162072780]
+script = ExtResource("world_manager_script")
+voxel_terrain_path = NodePath("../VoxelTerrain")
+player_path = NodePath("../Player")
+
+[node name="VoxelInteraction" type="Node" parent="VoxelWorldManager" unique_id=266126815]
+script = ExtResource("interaction_script")
+raycast_distance = null

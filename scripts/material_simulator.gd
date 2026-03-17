@@ -2,430 +2,508 @@ class_name MaterialSimulator
 extends Node
 
 const SIM_RATE := 0.05
+const SIM_X := 256
+const SIM_Y := 32
+const SIM_Z := 256
+const SHIFT_STEP := 64
+const SHIFT_MARGIN := 32
+
+const GEO_BUF_MAX := 32768
+const GEO_BUF_HEADER := 8
+const GEO_BUF_ENTRY := 8
+const GEO_BUF_SIZE := GEO_BUF_HEADER + GEO_BUF_MAX * GEO_BUF_ENTRY
+
+const PUSH_CONST_SIZE := 16
+const WORKGROUPS_X := SIM_X / 8
+const WORKGROUPS_Y := SIM_Y / 4
+const WORKGROUPS_Z := SIM_Z / 8
 
 var _voxel_tool: VoxelTool
-var _active_cells: Dictionary = {}
+var _terrain: VoxelTerrain
+var _player: Node3D
+var _sim_origin := Vector3i.ZERO
 var _sim_timer: float = 0.0
 var _tick_count: int = 0
-var _reacted_this_tick: Dictionary = {}
+var _source_positions: Dictionary = {}
+
+var _rd: RenderingDevice
+var _shader: RID
+var _pipeline: RID
+var _tex_a: RID
+var _tex_b: RID
+var _tex_mirror: RID
+var _geo_buffer: RID
+var _uniform_set: RID
+
+var _tex_current: RID
+var _tex_next: RID
+
+var _pending_indices: PackedInt32Array = PackedInt32Array()
+var _pending_values: PackedByteArray = PackedByteArray()
+
+var _last_tick_usec: int = 0
+var _last_changes_count: int = 0
+var _gpu_ready := false
+
+var _edge_fill_z: int = -1
+var _edge_fill_dx: int = 0
+var _edge_fill_nx_lo: int = 0
+var _edge_fill_nx_hi: int = 0
+var _edge_fill_nz_lo: int = 0
+var _edge_fill_nz_hi: int = 0
 
 signal voxel_changed(pos: Vector3i, new_voxel: int)
 
 
-func initialize(terrain: VoxelTerrain) -> void:
+func get_active_cell_count() -> int:
+	return SIM_X * SIM_Y * SIM_Z if _gpu_ready else 0
+
+func get_source_block_count() -> int:
+	return _source_positions.size()
+
+func get_last_tick_ms() -> float:
+	return _last_tick_usec / 1000.0
+
+func get_last_changes_count() -> int:
+	return _last_changes_count
+
+
+func initialize(terrain: VoxelTerrain, player: Node3D = null) -> void:
+	_terrain = terrain
+	_player = player
 	_voxel_tool = terrain.get_voxel_tool()
 	_voxel_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	_wait_for_terrain()
 
 
 func place_fluid(pos: Vector3i, fluid_base: int, level: int = MaterialRegistry.FLUID_LEVELS - 1) -> void:
 	if not _voxel_tool:
 		return
-	_voxel_tool.set_voxel(pos, MaterialRegistry.fluid_id(fluid_base, level))
-	_wake_region(pos, 2)
+	var fluid_id := MaterialRegistry.fluid_id(fluid_base, level)
+	_voxel_tool.set_voxel(pos, fluid_id)
+	_source_positions[pos] = true
+	if _gpu_ready:
+		_queue_gpu_write(pos, MaterialRegistry.encode_gpu(fluid_id, true))
 
 
 func remove_voxel(pos: Vector3i) -> void:
 	if not _voxel_tool:
 		return
 	_voxel_tool.set_voxel(pos, MaterialRegistry.AIR)
-	_wake_region(pos, 2)
+	_source_positions.erase(pos)
+	if _gpu_ready:
+		_queue_gpu_write(pos, MaterialRegistry.AIR)
 
 
-func _wake_region(center: Vector3i, radius: int) -> void:
-	for dx in range(-radius, radius + 1):
-		for dy in range(-radius, radius + 1):
-			for dz in range(-radius, radius + 1):
-				_active_cells[center + Vector3i(dx, dy, dz)] = true
+func sync_voxel(pos: Vector3i, voxel_id: int) -> void:
+	if _gpu_ready:
+		_queue_gpu_write(pos, MaterialRegistry.encode_gpu(voxel_id, false))
 
+
+func _wake_region(_center: Vector3i, _radius: int) -> void:
+	pass
+
+
+# ── GPU setup ──
+
+func _wait_for_terrain() -> void:
+	_sim_origin = _snap_origin_to_player()
+	for attempt in 30:
+		await get_tree().create_timer(0.5).timeout
+		var sample := _voxel_tool.get_voxel(Vector3i(SIM_X / 2, 0, SIM_Z / 2) + _sim_origin)
+		if sample != MaterialRegistry.AIR:
+			print("[MaterialSimulator] terrain ready after %.1fs" % [(attempt + 1) * 0.5])
+			_setup_gpu()
+			return
+	push_error("MaterialSimulator: terrain never loaded, giving up")
+
+
+func _snap_origin_to_player() -> Vector3i:
+	if _player:
+		var pp := _player.global_position
+		var cx := int(floorf(pp.x / SHIFT_STEP)) * SHIFT_STEP - SIM_X / 2
+		var cz := int(floorf(pp.z / SHIFT_STEP)) * SHIFT_STEP - SIM_Z / 2
+		return Vector3i(cx, -16, cz)
+	return Vector3i(-SIM_X / 2, -16, -SIM_Z / 2)
+
+
+func _setup_gpu() -> void:
+	_sim_origin = _snap_origin_to_player()
+
+	_rd = RenderingServer.create_local_rendering_device()
+	if not _rd:
+		push_error("MaterialSimulator: Failed to create local RenderingDevice")
+		return
+
+	var shader_file := load("res://shaders/material_sim.glsl") as RDShaderFile
+	if not shader_file:
+		push_error("MaterialSimulator: Failed to load material_sim.glsl")
+		return
+
+	var spirv := shader_file.get_spirv()
+	var compile_err := spirv.get_stage_compile_error(RenderingDevice.SHADER_STAGE_COMPUTE)
+	if compile_err != "":
+		push_error("MaterialSimulator: GLSL compile error: " + compile_err)
+		return
+
+	_shader = _rd.shader_create_from_spirv(spirv)
+	if not _shader.is_valid():
+		push_error("MaterialSimulator: shader_create_from_spirv failed")
+		return
+	_pipeline = _rd.compute_pipeline_create(_shader)
+
+	_create_textures()
+	_create_geo_buffer()
+	_tex_current = _tex_a
+	_tex_next = _tex_b
+	_build_uniform_set()
+	_sync_terrain_to_gpu()
+	_gpu_ready = true
+	print("[MaterialSimulator] GPU sim ready (origin=%s, %d sources)" % [_sim_origin, _source_positions.size()])
+
+
+func _create_textures() -> void:
+	var fmt := RDTextureFormat.new()
+	fmt.format = RenderingDevice.DATA_FORMAT_R8_UINT
+	fmt.texture_type = RenderingDevice.TEXTURE_TYPE_3D
+	fmt.width = SIM_X
+	fmt.height = SIM_Y
+	fmt.depth = SIM_Z
+	fmt.usage_bits = (
+		RenderingDevice.TEXTURE_USAGE_STORAGE_BIT
+		| RenderingDevice.TEXTURE_USAGE_CAN_UPDATE_BIT
+		| RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT
+		| RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT
+	)
+
+	var empty_data := PackedByteArray()
+	empty_data.resize(SIM_X * SIM_Y * SIM_Z)
+	empty_data.fill(0)
+
+	_tex_a = _rd.texture_create(fmt, RDTextureView.new(), [empty_data])
+	_tex_b = _rd.texture_create(fmt, RDTextureView.new(), [empty_data])
+	_tex_mirror = _rd.texture_create(fmt, RDTextureView.new(), [empty_data])
+
+
+func _create_geo_buffer() -> void:
+	_geo_buffer = _rd.storage_buffer_create(GEO_BUF_SIZE)
+
+
+func _build_uniform_set() -> void:
+	var u_current := RDUniform.new()
+	u_current.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_current.binding = 0
+	u_current.add_id(_tex_current)
+
+	var u_next := RDUniform.new()
+	u_next.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_next.binding = 1
+	u_next.add_id(_tex_next)
+
+	var u_geo := RDUniform.new()
+	u_geo.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	u_geo.binding = 2
+	u_geo.add_id(_geo_buffer)
+
+	var u_mirror := RDUniform.new()
+	u_mirror.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	u_mirror.binding = 3
+	u_mirror.add_id(_tex_mirror)
+
+	_uniform_set = _rd.uniform_set_create([u_current, u_next, u_geo, u_mirror], _shader, 0)
+
+
+func _sync_terrain_to_gpu() -> void:
+	var data := PackedByteArray()
+	data.resize(SIM_X * SIM_Y * SIM_Z)
+	var non_air := 0
+
+	for sz in SIM_Z:
+		for sy in SIM_Y:
+			for sx in SIM_X:
+				var world_pos := Vector3i(sx, sy, sz) + _sim_origin
+				var voxel := _voxel_tool.get_voxel(world_pos)
+				var is_src := _source_positions.has(world_pos)
+				var idx := sx + sy * SIM_X + sz * SIM_X * SIM_Y
+				data[idx] = MaterialRegistry.encode_gpu(voxel, is_src)
+				if voxel != MaterialRegistry.AIR:
+					non_air += 1
+
+	_rd.texture_update(_tex_current, 0, data)
+	_rd.texture_update(_tex_next, 0, data)
+	_rd.texture_update(_tex_mirror, 0, data)
+	print("[MaterialSimulator] synced terrain: %d non-air voxels out of %d" % [non_air, SIM_X * SIM_Y * SIM_Z])
+
+
+# ── pending writes (batched per dispatch) ──
+
+func _queue_gpu_write(world_pos: Vector3i, gpu_byte: int) -> void:
+	var sp := world_pos - _sim_origin
+	if sp.x < 0 or sp.x >= SIM_X or sp.y < 0 or sp.y >= SIM_Y or sp.z < 0 or sp.z >= SIM_Z:
+		return
+	_pending_indices.append(sp.x + sp.y * SIM_X + sp.z * SIM_X * SIM_Y)
+	_pending_values.append(gpu_byte)
+
+
+func _flush_pending_writes() -> void:
+	if _pending_indices.is_empty():
+		return
+	var data := _rd.texture_get_data(_tex_current, 0)
+	for i in _pending_indices.size():
+		data[_pending_indices[i]] = _pending_values[i]
+	_rd.texture_update(_tex_current, 0, data)
+	_rd.texture_update(_tex_mirror, 0, data)
+	_pending_indices.clear()
+	_pending_values.clear()
+
+
+# ── simulation dispatch ──
 
 func _physics_process(delta: float) -> void:
-	if not _voxel_tool:
+	if not _gpu_ready:
 		return
+	if _edge_fill_z >= 0:
+		_continue_edge_fill()
 	_sim_timer += delta
 	if _sim_timer < SIM_RATE:
 		return
 	_sim_timer -= SIM_RATE
 	_tick_count += 1
-	_simulate_tick()
+	_dispatch_tick()
 
 
-func _simulate_tick() -> void:
-	if _active_cells.is_empty():
+func _check_shift() -> void:
+	if not _player:
+		return
+	var pp := _player.global_position
+	var px := int(floorf(pp.x))
+	var pz := int(floorf(pp.z))
+
+	var edge_min_x := _sim_origin.x + SHIFT_MARGIN
+	var edge_max_x := _sim_origin.x + SIM_X - SHIFT_MARGIN
+	var edge_min_z := _sim_origin.z + SHIFT_MARGIN
+	var edge_max_z := _sim_origin.z + SIM_Z - SHIFT_MARGIN
+
+	if px >= edge_min_x and px < edge_max_x and pz >= edge_min_z and pz < edge_max_z:
 		return
 
-	var changes: Dictionary = {}
-	var next_active: Dictionary = {}
-	var cells: Array = _active_cells.keys()
-	_reacted_this_tick.clear()
+	var new_origin := _snap_origin_to_player()
+	if new_origin != _sim_origin:
+		_shift_volume(new_origin)
 
-	for pos: Vector3i in cells:
-		var voxel := _voxel_tool.get_voxel(pos)
-		if not MaterialRegistry.is_simulatable(voxel):
+
+func _shift_volume(new_origin: Vector3i) -> void:
+	var t0 := Time.get_ticks_usec()
+	_pending_indices.clear()
+	_pending_values.clear()
+	_edge_fill_z = -1
+
+	var delta := new_origin - _sim_origin
+	var dx := delta.x
+	var dz := delta.z
+	_sim_origin = new_origin
+
+	if dx == 0 and dz == 0:
+		return
+
+	var src_pos := Vector3(maxi(0, dx), 0, maxi(0, dz))
+	var dst_pos := Vector3(maxi(0, -dx), 0, maxi(0, -dz))
+	var copy_size := Vector3(SIM_X - absi(dx), SIM_Y, SIM_Z - absi(dz))
+
+	var zero_data := PackedByteArray()
+	zero_data.resize(SIM_X * SIM_Y * SIM_Z)
+
+	_rd.texture_update(_tex_next, 0, zero_data)
+	_rd.texture_update(_tex_mirror, 0, zero_data)
+	_rd.submit()
+	_rd.sync()
+
+	if copy_size.x > 0 and copy_size.z > 0:
+		_rd.texture_copy(_tex_current, _tex_next, src_pos, dst_pos, copy_size, 0, 0, 0, 0)
+		_rd.texture_copy(_tex_current, _tex_mirror, src_pos, dst_pos, copy_size, 0, 0, 0, 0)
+		_rd.submit()
+		_rd.sync()
+
+	var tmp := _tex_current
+	_tex_current = _tex_next
+	_tex_next = tmp
+	_rebuild_uniform_set()
+
+	_edge_fill_dx = dx
+	_edge_fill_nx_lo = maxi(0, -dx)
+	_edge_fill_nx_hi = mini(SIM_X, SIM_X - dx)
+	_edge_fill_nz_lo = maxi(0, -dz)
+	_edge_fill_nz_hi = mini(SIM_Z, SIM_Z - dz)
+	_edge_fill_z = 0
+
+	var elapsed := (Time.get_ticks_usec() - t0) / 1000.0
+	print("[MaterialSimulator] shifted volume to %s (%.1f ms, filling edges)" % [_sim_origin, elapsed])
+
+
+func _continue_edge_fill() -> void:
+	var t0 := Time.get_ticks_usec()
+	var budget_usec := 4000
+	var slice_size := SIM_X * SIM_Y
+
+	while _edge_fill_z < SIM_Z:
+		var nz := _edge_fill_z
+		_edge_fill_z += 1
+		var is_z_edge := nz < _edge_fill_nz_lo or nz >= _edge_fill_nz_hi
+		var has_x_edge := _edge_fill_dx != 0 and not is_z_edge
+
+		if not is_z_edge and not has_x_edge:
 			continue
 
-		var base := MaterialRegistry.fluid_base(voxel)
-		var is_gas := MaterialRegistry.is_gas(voxel)
-
-		if is_gas:
-			var gas_cfg: Dictionary = MaterialRegistry.GAS_CONFIG.get(base, {})
-			var tick_div: int = gas_cfg.get("tick_divisor", 1)
-			if tick_div > 1 and _tick_count % tick_div != 0:
-				next_active[pos] = true
-				continue
-			_simulate_gas(pos, base, voxel, changes, next_active)
+		if is_z_edge:
+			for ny in SIM_Y:
+				for nx in SIM_X:
+					var world_pos := Vector3i(nx, ny, nz) + _sim_origin
+					var voxel := _voxel_tool.get_voxel(world_pos)
+					if voxel == MaterialRegistry.AIR:
+						continue
+					var is_src := _source_positions.has(world_pos)
+					_queue_gpu_write(world_pos, MaterialRegistry.encode_gpu(voxel, is_src))
 		else:
-			var config: Dictionary = MaterialRegistry.FLUID_CONFIG.get(base, {})
-			var tick_div: int = config.get("tick_divisor", 1)
-			if tick_div > 1 and _tick_count % tick_div != 0:
-				next_active[pos] = true
-				continue
-			_simulate_fluid(pos, base, voxel, changes, next_active)
+			for ny in SIM_Y:
+				if _edge_fill_dx > 0:
+					for nx in range(_edge_fill_nx_hi, SIM_X):
+						var world_pos := Vector3i(nx, ny, nz) + _sim_origin
+						var voxel := _voxel_tool.get_voxel(world_pos)
+						if voxel == MaterialRegistry.AIR:
+							continue
+						var is_src := _source_positions.has(world_pos)
+						_queue_gpu_write(world_pos, MaterialRegistry.encode_gpu(voxel, is_src))
+				else:
+					for nx in range(0, _edge_fill_nx_lo):
+						var world_pos := Vector3i(nx, ny, nz) + _sim_origin
+						var voxel := _voxel_tool.get_voxel(world_pos)
+						if voxel == MaterialRegistry.AIR:
+							continue
+						var is_src := _source_positions.has(world_pos)
+						_queue_gpu_write(world_pos, MaterialRegistry.encode_gpu(voxel, is_src))
 
-	for change_pos: Vector3i in changes:
-		_voxel_tool.set_voxel(change_pos, changes[change_pos])
-		voxel_changed.emit(change_pos, changes[change_pos])
-
-	_active_cells = next_active
-
-
-func _simulate_fluid(pos: Vector3i, base: int, voxel: int, changes: Dictionary, next_active: Dictionary) -> void:
-	var level := MaterialRegistry.fluid_level(voxel)
-
-	if _check_reactions(pos, voxel, changes, next_active):
-		return
-
-	if _try_flow_down(pos, base, level, changes, next_active):
-		return
-
-	if _try_fill_below(pos, base, level, changes, next_active):
-		return
-
-	_try_spread(pos, base, level, changes, next_active)
-
-
-func _simulate_gas(pos: Vector3i, base: int, voxel: int, changes: Dictionary, next_active: Dictionary) -> void:
-	var level := MaterialRegistry.fluid_level(voxel)
-	var gas_cfg: Dictionary = MaterialRegistry.GAS_CONFIG.get(base, {})
-	var dissipate: int = gas_cfg.get("dissipate_rate", 1)
-
-	var new_level := level - dissipate
-	if new_level <= 0:
-		_write_change(changes, pos, MaterialRegistry.AIR)
-		_activate_neighbors(next_active, pos)
-		return
-
-	if _try_rise(pos, base, new_level, changes, next_active):
-		_write_change(changes, pos, MaterialRegistry.AIR)
-		return
-
-	_write_change(changes, pos, MaterialRegistry.fluid_id(base, new_level))
-	_activate_neighbors(next_active, pos)
-
-	_try_gas_spread(pos, base, new_level, changes, next_active)
-
-
-func _try_rise(pos: Vector3i, base: int, level: int, changes: Dictionary, next_active: Dictionary) -> bool:
-	var above := pos + Vector3i.UP
-	var above_voxel := _voxel_tool.get_voxel(above)
-
-	if above_voxel == MaterialRegistry.AIR:
-		_write_change(changes, above, MaterialRegistry.fluid_id(base, level))
-		_activate_neighbors(next_active, pos)
-		_activate_neighbors(next_active, above)
-		return true
-
-	if MaterialRegistry.is_gas(above_voxel) and MaterialRegistry.fluid_base(above_voxel) == base:
-		if MaterialRegistry.fluid_level(above_voxel) < level:
-			_write_change(changes, above, MaterialRegistry.fluid_id(base, level))
-			_activate_neighbors(next_active, above)
-			return true
-
-	return false
-
-
-func _try_gas_spread(pos: Vector3i, base: int, level: int, changes: Dictionary, next_active: Dictionary) -> void:
-	if level <= 0:
-		return
-
-	var gas_cfg: Dictionary = MaterialRegistry.GAS_CONFIG.get(base, {})
-	var spread_loss: int = gas_cfg.get("spread_loss", 2)
-	var spread_level := level - spread_loss
-	if spread_level < 0:
-		return
-
-	var dirs: Array[Vector3i] = [Vector3i.RIGHT, Vector3i.LEFT, Vector3i.FORWARD, Vector3i.BACK]
-
-	for dir: Vector3i in dirs:
-		var neighbor: Vector3i = pos + dir
-		var n_voxel := _voxel_tool.get_voxel(neighbor)
-
-		if n_voxel == MaterialRegistry.AIR:
-			_write_change(changes, neighbor, MaterialRegistry.fluid_id(base, spread_level))
-			_activate_neighbors(next_active, neighbor)
-
-
-# -- Reactions --
-
-func _check_reactions(pos: Vector3i, voxel: int, changes: Dictionary, next_active: Dictionary) -> bool:
-	if _reacted_this_tick.has(pos):
-		return false
-
-	var dirs: Array[Vector3i] = [
-		Vector3i.RIGHT, Vector3i.LEFT,
-		Vector3i.UP, Vector3i.DOWN,
-		Vector3i.FORWARD, Vector3i.BACK
-	]
-
-	for dir: Vector3i in dirs:
-		var neighbor_pos: Vector3i = pos + dir
-		if _reacted_this_tick.has(neighbor_pos):
-			continue
-
-		var neighbor_voxel := _voxel_tool.get_voxel(neighbor_pos)
-		if neighbor_voxel == MaterialRegistry.AIR:
-			continue
-
-		var reaction: Variant = MaterialRegistry.get_reaction(voxel, neighbor_voxel)
-		if reaction == null:
-			continue
-
-		var both_fluid := MaterialRegistry.is_fluid(voxel) and MaterialRegistry.is_fluid(neighbor_voxel)
-
-		if both_fluid:
-			_apply_nibble_reaction(pos, voxel, neighbor_pos, neighbor_voxel, reaction, changes, next_active)
-		else:
-			_apply_instant_reaction(pos, voxel, neighbor_pos, neighbor_voxel, reaction, changes, next_active)
-
-		_reacted_this_tick[pos] = true
-		_reacted_this_tick[neighbor_pos] = true
-		return true
-
-	return false
-
-
-func _apply_nibble_reaction(pos: Vector3i, voxel: int, neighbor_pos: Vector3i, neighbor_voxel: int, reaction: Dictionary, changes: Dictionary, next_active: Dictionary) -> void:
-	var my_base := MaterialRegistry.fluid_base(voxel)
-	var my_level := MaterialRegistry.fluid_level(voxel)
-	var nb_base := MaterialRegistry.fluid_base(neighbor_voxel)
-	var nb_level := MaterialRegistry.fluid_level(neighbor_voxel)
-
-	var am_a := (my_base <= nb_base)
-	var result_self: int = reaction["a"] if am_a else reaction["b"]
-	var result_neighbor: int = reaction["a"] if not am_a else reaction["b"]
-
-	var my_new := my_level - 1
-	var nb_new := nb_level - 1
-
-	var self_consumed := my_new < 0
-	var neighbor_consumed := nb_new < 0
-
-	if self_consumed:
-		_apply_final_product(changes, pos, result_self)
-	else:
-		changes[pos] = MaterialRegistry.fluid_id(my_base, my_new)
-
-	if neighbor_consumed:
-		_apply_final_product(changes, neighbor_pos, result_neighbor)
-	else:
-		changes[neighbor_pos] = MaterialRegistry.fluid_id(nb_base, nb_new)
-
-	_drain_chain(pos, my_base, changes, next_active)
-	_drain_chain(neighbor_pos, nb_base, changes, next_active)
-
-	var has_gas_product := _is_gas_product(result_self) or _is_gas_product(result_neighbor)
-	if has_gas_product and not (self_consumed and neighbor_consumed):
-		var gas_base: int = result_self if _is_gas_product(result_self) else result_neighbor
-		_try_spawn_gas_above(pos, neighbor_pos, gas_base, changes, next_active)
-
-	_activate_neighbors(next_active, pos)
-	_activate_neighbors(next_active, neighbor_pos)
-
-
-func _drain_chain(start_pos: Vector3i, fluid_base: int, changes: Dictionary, next_active: Dictionary) -> void:
-	var current := start_pos
-	var visited: Dictionary = {start_pos: true}
-	var dirs: Array[Vector3i] = [
-		Vector3i.RIGHT, Vector3i.LEFT,
-		Vector3i.UP, Vector3i.DOWN,
-		Vector3i.FORWARD, Vector3i.BACK
-	]
-
-	while true:
-		var best_pos := Vector3i.ZERO
-		var best_level := -1
-		var found := false
-
-		for dir: Vector3i in dirs:
-			var np: Vector3i = current + dir
-			if visited.has(np):
-				continue
-			var nv := _voxel_tool.get_voxel(np)
-			if not MaterialRegistry.is_fluid(nv):
-				continue
-			if MaterialRegistry.fluid_base(nv) != fluid_base:
-				continue
-			var nl := MaterialRegistry.fluid_level(nv)
-			if nl > best_level:
-				best_level = nl
-				best_pos = np
-				found = true
-
-		if not found:
+		if Time.get_ticks_usec() - t0 > budget_usec:
 			break
 
-		visited[best_pos] = true
-		var new_level := best_level - 1
-		if new_level < 0:
-			changes[best_pos] = MaterialRegistry.AIR
-		else:
-			changes[best_pos] = MaterialRegistry.fluid_id(fluid_base, new_level)
-		_activate_neighbors(next_active, best_pos)
-		current = best_pos
+	if _edge_fill_z >= SIM_Z:
+		_edge_fill_z = -1
 
 
-func _apply_instant_reaction(pos: Vector3i, voxel: int, neighbor_pos: Vector3i, neighbor_voxel: int, reaction: Dictionary, changes: Dictionary, next_active: Dictionary) -> void:
-	var my_base := MaterialRegistry.fluid_base(voxel) if MaterialRegistry.is_simulatable(voxel) else voxel
-	var nb_base := MaterialRegistry.fluid_base(neighbor_voxel) if MaterialRegistry.is_simulatable(neighbor_voxel) else neighbor_voxel
-	var rule: Dictionary = reaction
+func _dispatch_tick() -> void:
+	var t0 := Time.get_ticks_usec()
 
-	var am_a := (my_base <= nb_base)
-	var result_self: int = rule["a"] if am_a else rule["b"]
-	var result_neighbor: int = rule["a"] if not am_a else rule["b"]
+	_check_shift()
+	_flush_pending_writes()
 
-	if result_self != -1:
-		_apply_final_product(changes, pos, result_self)
-	if result_neighbor != -1:
-		_apply_final_product(changes, neighbor_pos, result_neighbor)
+	var zero_bytes := PackedByteArray()
+	zero_bytes.resize(4)
+	zero_bytes.fill(0)
+	_rd.buffer_update(_geo_buffer, 0, 4, zero_bytes)
 
-	_activate_neighbors(next_active, pos)
-	_activate_neighbors(next_active, neighbor_pos)
+	_rd.texture_copy(
+		_tex_current, _tex_next,
+		Vector3.ZERO, Vector3.ZERO,
+		Vector3(SIM_X, SIM_Y, SIM_Z),
+		0, 0, 0, 0)
+	_rd.submit()
+	_rd.sync()
+
+	var sim_push := PackedByteArray()
+	sim_push.resize(PUSH_CONST_SIZE)
+	sim_push.encode_u32(0, _tick_count % 2)
+	sim_push.encode_u32(4, _tick_count)
+	sim_push.encode_u32(8, 0)
+	sim_push.encode_u32(12, 0)
+
+	var diff_push := PackedByteArray()
+	diff_push.resize(PUSH_CONST_SIZE)
+	diff_push.encode_u32(0, 0)
+	diff_push.encode_u32(4, 0)
+	diff_push.encode_u32(8, 1)
+	diff_push.encode_u32(12, 0)
+
+	var cl := _rd.compute_list_begin()
+	_rd.compute_list_bind_compute_pipeline(cl, _pipeline)
+	_rd.compute_list_bind_uniform_set(cl, _uniform_set, 0)
+
+	_rd.compute_list_set_push_constant(cl, sim_push, PUSH_CONST_SIZE)
+	_rd.compute_list_dispatch(cl, WORKGROUPS_X, WORKGROUPS_Y, WORKGROUPS_Z)
+
+	_rd.compute_list_add_barrier(cl)
+
+	_rd.compute_list_set_push_constant(cl, diff_push, PUSH_CONST_SIZE)
+	_rd.compute_list_dispatch(cl, WORKGROUPS_X, WORKGROUPS_Y, WORKGROUPS_Z)
+
+	_rd.compute_list_end()
+	_rd.submit()
+	_rd.sync()
+
+	var tmp := _tex_current
+	_tex_current = _tex_next
+	_tex_next = tmp
+	_rebuild_uniform_set()
+
+	_apply_changes()
+
+	_last_tick_usec = Time.get_ticks_usec() - t0
+
+	if _tick_count <= 3:
+		print("[MaterialSimulator] tick %d: %d changes, %.2f ms" % [_tick_count, _last_changes_count, get_last_tick_ms()])
 
 
-func _apply_final_product(changes: Dictionary, pos: Vector3i, product: int) -> void:
-	if _is_gas_product(product):
-		_write_change(changes, pos, MaterialRegistry.fluid_id(product, MaterialRegistry.FLUID_LEVELS - 1))
-	elif product == MaterialRegistry.AIR:
-		_write_change(changes, pos, MaterialRegistry.AIR)
-	else:
-		_write_change(changes, pos, product)
+func _rebuild_uniform_set() -> void:
+	if _uniform_set.is_valid():
+		_rd.free_rid(_uniform_set)
+	_build_uniform_set()
 
 
-func _is_gas_product(product: int) -> bool:
-	return product in MaterialRegistry.GAS_BASES
-
-
-func _try_spawn_gas_above(pos: Vector3i, neighbor_pos: Vector3i, gas_base: int, changes: Dictionary, next_active: Dictionary) -> void:
-	var above_pos := pos + Vector3i.UP
-	var above_voxel := _voxel_tool.get_voxel(above_pos)
-	if above_voxel == MaterialRegistry.AIR or MaterialRegistry.is_gas(above_voxel):
-		_write_change(changes, above_pos, MaterialRegistry.fluid_id(gas_base, 1))
-		_activate_neighbors(next_active, above_pos)
+func _apply_changes() -> void:
+	if not _voxel_tool:
 		return
-
-	var above_nb := neighbor_pos + Vector3i.UP
-	var above_nb_voxel := _voxel_tool.get_voxel(above_nb)
-	if above_nb_voxel == MaterialRegistry.AIR or MaterialRegistry.is_gas(above_nb_voxel):
-		_write_change(changes, above_nb, MaterialRegistry.fluid_id(gas_base, 1))
-		_activate_neighbors(next_active, above_nb)
-
-
-# -- Flow --
-
-func _try_flow_down(pos: Vector3i, base: int, level: int, changes: Dictionary, next_active: Dictionary) -> bool:
-	var below := pos + Vector3i.DOWN
-	var below_voxel := _voxel_tool.get_voxel(below)
-
-	if below_voxel == MaterialRegistry.AIR:
-		_write_change(changes, below, MaterialRegistry.fluid_id(base, level))
-		_write_change(changes, pos, MaterialRegistry.AIR)
-		_activate_neighbors(next_active, pos)
-		_activate_neighbors(next_active, below)
-		return true
-
-	if MaterialRegistry.is_gas(below_voxel):
-		_write_change(changes, below, MaterialRegistry.fluid_id(base, level))
-		_write_change(changes, pos, below_voxel)
-		_activate_neighbors(next_active, pos)
-		_activate_neighbors(next_active, below)
-		return true
-
-	return false
-
-
-func _try_fill_below(pos: Vector3i, base: int, level: int, changes: Dictionary, next_active: Dictionary) -> bool:
-	var below := pos + Vector3i.DOWN
-	var below_voxel := _voxel_tool.get_voxel(below)
-
-	if not MaterialRegistry.is_fluid(below_voxel):
-		return false
-	if MaterialRegistry.fluid_base(below_voxel) != base:
-		return false
-	if MaterialRegistry.fluid_level(below_voxel) >= MaterialRegistry.FLUID_LEVELS - 1:
-		return false
-
-	var below_level := MaterialRegistry.fluid_level(below_voxel)
-	var transfer := mini(level, MaterialRegistry.FLUID_LEVELS - 1 - below_level)
-	if transfer <= 0:
-		return false
-
-	_write_change(changes, below, MaterialRegistry.fluid_id(base, below_level + transfer))
-	var remaining := level - transfer
-	if remaining <= 0:
-		_write_change(changes, pos, MaterialRegistry.AIR)
-	else:
-		_write_change(changes, pos, MaterialRegistry.fluid_id(base, remaining))
-	_activate_neighbors(next_active, pos)
-	_activate_neighbors(next_active, below)
-	return true
-
-
-func _try_spread(pos: Vector3i, base: int, level: int, changes: Dictionary, next_active: Dictionary) -> void:
-	if level <= 0:
+	var count_bytes := _rd.buffer_get_data(_geo_buffer, 0, 4)
+	var count := count_bytes.decode_u32(0)
+	if count == 0:
+		_last_changes_count = 0
 		return
+	count = mini(count, GEO_BUF_MAX)
 
-	var config: Dictionary = MaterialRegistry.FLUID_CONFIG.get(base, {})
-	var spread_loss: int = config.get("spread_loss", 1)
-	var spread_level := level - spread_loss
-	if spread_level < 0:
+	var entries := _rd.buffer_get_data(_geo_buffer, GEO_BUF_HEADER, count * GEO_BUF_ENTRY)
+
+	for i in count:
+		var packed_pos := entries.decode_u32(i * 8)
+		var new_type := entries.decode_u32(i * 8 + 4)
+		var sx := int(packed_pos & 0x3FF)
+		var sy := int((packed_pos >> 10) & 0x3FF)
+		var sz := int((packed_pos >> 20) & 0x3FF)
+		var world_pos := Vector3i(sx, sy, sz) + _sim_origin
+
+		_voxel_tool.set_voxel(world_pos, new_type)
+		voxel_changed.emit(world_pos, new_type)
+
+	_last_changes_count = count
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_cleanup_gpu()
+
+
+func _cleanup_gpu() -> void:
+	if not _rd:
 		return
-
-	var dirs: Array[Vector3i] = [Vector3i.RIGHT, Vector3i.LEFT, Vector3i.FORWARD, Vector3i.BACK]
-
-	for dir: Vector3i in dirs:
-		var neighbor: Vector3i = pos + dir
-		var n_voxel := _voxel_tool.get_voxel(neighbor)
-
-		if n_voxel == MaterialRegistry.AIR:
-			_write_change(changes, neighbor, MaterialRegistry.fluid_id(base, spread_level))
-			_activate_neighbors(next_active, neighbor)
-		elif MaterialRegistry.is_fluid(n_voxel) and MaterialRegistry.fluid_base(n_voxel) == base:
-			if MaterialRegistry.fluid_level(n_voxel) < spread_level:
-				_write_change(changes, neighbor, MaterialRegistry.fluid_id(base, spread_level))
-				_activate_neighbors(next_active, neighbor)
-
-
-# -- Helpers --
-
-func _write_change(changes: Dictionary, pos: Vector3i, new_id: int) -> void:
-	if changes.has(pos):
-		var existing := changes[pos] as int
-		if MaterialRegistry.is_simulatable(new_id) and MaterialRegistry.is_simulatable(existing):
-			if MaterialRegistry.fluid_base(new_id) == MaterialRegistry.fluid_base(existing):
-				if MaterialRegistry.fluid_level(new_id) > MaterialRegistry.fluid_level(existing):
-					changes[pos] = new_id
-		elif MaterialRegistry.is_simulatable(new_id) and existing == MaterialRegistry.AIR:
-			changes[pos] = new_id
-		elif MaterialRegistry.is_solid(new_id):
-			changes[pos] = new_id
-	else:
-		changes[pos] = new_id
-
-
-func _activate_neighbors(active_set: Dictionary, pos: Vector3i) -> void:
-	active_set[pos] = true
-	active_set[pos + Vector3i.RIGHT] = true
-	active_set[pos + Vector3i.LEFT] = true
-	active_set[pos + Vector3i.UP] = true
-	active_set[pos + Vector3i.DOWN] = true
-	active_set[pos + Vector3i.FORWARD] = true
-	active_set[pos + Vector3i.BACK] = true
+	if _uniform_set.is_valid():
+		_rd.free_rid(_uniform_set)
+	if _pipeline.is_valid():
+		_rd.free_rid(_pipeline)
+	if _shader.is_valid():
+		_rd.free_rid(_shader)
+	if _tex_a.is_valid():
+		_rd.free_rid(_tex_a)
+	if _tex_b.is_valid():
+		_rd.free_rid(_tex_b)
+	if _tex_mirror.is_valid():
+		_rd.free_rid(_tex_mirror)
+	if _geo_buffer.is_valid():
+		_rd.free_rid(_geo_buffer)
+	_rd.free()
+	_rd = null

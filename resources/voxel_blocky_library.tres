@@ -1,23 +1,22 @@
-[gd_resource type="VoxelBlockyLibrary" load_steps=41 format=3]
+[gd_resource type="VoxelBlockyLibrary" format=3 uid="uid://0hekgoj4qr54"]
 
-[ext_resource type="VoxelBlockyFluid" path="res://resources/water_fluid.tres" id="water_fluid"]
-[ext_resource type="VoxelBlockyFluid" path="res://resources/lava_fluid.tres" id="lava_fluid"]
-[ext_resource type="VoxelBlockyFluid" path="res://resources/acid_fluid.tres" id="acid_fluid"]
-[ext_resource type="VoxelBlockyFluid" path="res://resources/toxic_gas_fluid.tres" id="gas_fluid"]
+[ext_resource type="VoxelBlockyFluid" uid="uid://cntr7jc7aong" path="res://resources/acid_fluid.tres" id="acid_fluid"]
+[ext_resource type="VoxelBlockyFluid" uid="uid://bh8aobunm623j" path="res://resources/toxic_gas_fluid.tres" id="gas_fluid"]
+[ext_resource type="VoxelBlockyFluid" uid="uid://bb46l6b54sgc7" path="res://resources/lava_fluid.tres" id="lava_fluid"]
+[ext_resource type="VoxelBlockyFluid" uid="uid://cjw80isgmfrne" path="res://resources/water_fluid.tres" id="water_fluid"]
 
 [sub_resource type="VoxelBlockyModelEmpty" id="model_air"]
 
 [sub_resource type="VoxelBlockyModelCube" id="model_stone"]
-color = Color(0.6, 0.58, 0.55, 1)
 atlas_size_in_tiles = Vector2i(1, 1)
+color = Color(0.6, 0.58, 0.55, 1)
 
 [sub_resource type="VoxelBlockyModelCube" id="model_bedrock"]
-color = Color(0.25, 0.23, 0.22, 1)
 atlas_size_in_tiles = Vector2i(1, 1)
+color = Color(0.25, 0.23, 0.22, 1)
 
 [sub_resource type="VoxelBlockyModelFluid" id="water_0"]
 fluid = ExtResource("water_fluid")
-level = 0
 transparency_index = 1
 
 [sub_resource type="VoxelBlockyModelFluid" id="water_1"]
@@ -56,16 +55,15 @@ level = 7
 transparency_index = 1
 
 [sub_resource type="VoxelBlockyModelCube" id="model_dirt"]
-color = Color(0.55, 0.35, 0.18, 1)
 atlas_size_in_tiles = Vector2i(1, 1)
+color = Color(0.55, 0.35, 0.18, 1)
 
 [sub_resource type="VoxelBlockyModelCube" id="model_mud"]
-color = Color(0.18, 0.12, 0.08, 1)
 atlas_size_in_tiles = Vector2i(1, 1)
+color = Color(0.18, 0.12, 0.08, 1)
 
 [sub_resource type="VoxelBlockyModelFluid" id="lava_0"]
 fluid = ExtResource("lava_fluid")
-level = 0
 transparency_index = 2
 
 [sub_resource type="VoxelBlockyModelFluid" id="lava_1"]
@@ -105,7 +103,6 @@ transparency_index = 2
 
 [sub_resource type="VoxelBlockyModelFluid" id="acid_0"]
 fluid = ExtResource("acid_fluid")
-level = 0
 transparency_index = 3
 
 [sub_resource type="VoxelBlockyModelFluid" id="acid_1"]
@@ -184,4 +181,4 @@ level = 7
 transparency_index = 4
 
 [resource]
-models = [SubResource("model_air"), SubResource("model_stone"), SubResource("model_bedrock"), SubResource("water_0"), SubResource("water_1"), SubResource("water_2"), SubResource("water_3"), SubResource("water_4"), SubResource("water_5"), SubResource("water_6"), SubResource("water_7"), SubResource("model_dirt"), SubResource("model_mud"), SubResource("lava_0"), SubResource("lava_1"), SubResource("lava_2"), SubResource("lava_3"), SubResource("lava_4"), SubResource("lava_5"), SubResource("lava_6"), SubResource("lava_7"), SubResource("acid_0"), SubResource("acid_1"), SubResource("acid_2"), SubResource("acid_3"), SubResource("acid_4"), SubResource("acid_5"), SubResource("acid_6"), SubResource("acid_7"), SubResource("gas_0"), SubResource("gas_1"), SubResource("gas_2"), SubResource("gas_3"), SubResource("gas_4"), SubResource("gas_5"), SubResource("gas_6"), SubResource("gas_7")]
+models = Array[VoxelBlockyModel]([SubResource("model_air"), SubResource("model_stone"), SubResource("model_bedrock"), SubResource("water_0"), SubResource("water_1"), SubResource("water_2"), SubResource("water_3"), SubResource("water_4"), SubResource("water_5"), SubResource("water_6"), SubResource("water_7"), SubResource("model_dirt"), SubResource("model_mud"), SubResource("lava_0"), SubResource("lava_1"), SubResource("lava_2"), SubResource("lava_3"), SubResource("lava_4"), SubResource("lava_5"), SubResource("lava_6"), SubResource("lava_7"), SubResource("acid_0"), SubResource("acid_1"), SubResource("acid_2"), SubResource("acid_3"), SubResource("acid_4"), SubResource("acid_5"), SubResource("acid_6"), SubResource("acid_7"), SubResource("gas_0"), SubResource("gas_1"), SubResource("gas_2"), SubResource("gas_3"), SubResource("gas_4"), SubResource("gas_5"), SubResource("gas_6"), SubResource("gas_7")])

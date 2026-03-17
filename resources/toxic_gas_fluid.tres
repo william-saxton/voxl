@@ -1,15 +1,14 @@
-[gd_resource type="VoxelBlockyFluid" load_steps=3 format=3]
+[gd_resource type="VoxelBlockyFluid" format=3 uid="uid://bh8aobunm623j"]
 
 [ext_resource type="Shader" path="res://shaders/gas.gdshader" id="gas_shader"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_gas"]
+render_priority = 0
 shader = ExtResource("gas_shader")
 shader_parameter/gas_color = Color(0.6, 0.75, 0.15, 0.35)
 shader_parameter/drift_speed = 0.8
 shader_parameter/pulse_speed = 2.0
 shader_parameter/noise_scale = 6.0
-render_priority = 0
 
 [resource]
-dip_when_flowing_down = false
 material = SubResource("ShaderMaterial_gas")

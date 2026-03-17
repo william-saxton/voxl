@@ -92,3 +92,16 @@ static func _pair(a: int, b: int) -> Vector2i:
 	if a <= b:
 		return Vector2i(a, b)
 	return Vector2i(b, a)
+
+
+const GPU_SOURCE_FLAG := 0x80
+const GPU_ID_MASK := 0x7F
+
+static func encode_gpu(id: int, is_source: bool) -> int:
+	return (id & GPU_ID_MASK) | (GPU_SOURCE_FLAG if is_source else 0)
+
+static func decode_gpu_id(byte: int) -> int:
+	return byte & GPU_ID_MASK
+
+static func decode_gpu_source(byte: int) -> bool:
+	return (byte & GPU_SOURCE_FLAG) != 0

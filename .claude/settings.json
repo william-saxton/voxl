@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"is_area_editable\\\\|try_set_voxel\\\\|set_voxel\" c:/personal-workspace/voxl/addons/zylann.voxel/ --include=*.xml -l)"
+    ]
+  }
+}

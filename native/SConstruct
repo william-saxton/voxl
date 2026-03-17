@@ -1,0 +1,21 @@
+#!/usr/bin/env python
+import os
+
+env = SConscript("godot-cpp/SConstruct")
+
+env.Append(CPPPATH=["src/"])
+
+sources = Glob("src/*.cpp")
+
+if env["platform"] == "windows":
+    library = env.SharedLibrary(
+        target="../bin/libvoxl_native{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),
+        source=sources,
+    )
+else:
+    library = env.SharedLibrary(
+        target="../bin/libvoxl_native{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),
+        source=sources,
+    )
+
+Default(library)
