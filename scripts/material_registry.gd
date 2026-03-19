@@ -4,25 +4,25 @@ const AIR := 0
 const STONE := 1
 const BEDROCK := 2
 const WATER_BASE := 3
-const DIRT := 11
-const MUD := 12
-const LAVA_BASE := 13
-const ACID_BASE := 21
-const GAS_BASE := 29
+const DIRT := 19
+const MUD := 20
+const LAVA_BASE := 21
+const ACID_BASE := 37
+const GAS_BASE := 53
 
-const FLUID_LEVELS := 8
+const FLUID_LEVELS := 16
 
 const FLUID_BASES: Array[int] = [WATER_BASE, LAVA_BASE, ACID_BASE]
 const GAS_BASES: Array[int] = [GAS_BASE]
 
 const FLUID_CONFIG := {
-	WATER_BASE: {"tick_divisor": 1, "spread_loss": 1},
-	LAVA_BASE:  {"tick_divisor": 3, "spread_loss": 2},
-	ACID_BASE:  {"tick_divisor": 1, "spread_loss": 1},
+	WATER_BASE: {"tick_divisor": 1, "spread_loss": 2},
+	LAVA_BASE:  {"tick_divisor": 3, "spread_loss": 4},
+	ACID_BASE:  {"tick_divisor": 1, "spread_loss": 2},
 }
 
 const GAS_CONFIG := {
-	GAS_BASE: {"tick_divisor": 2, "spread_loss": 2, "dissipate_rate": 1},
+	GAS_BASE: {"tick_divisor": 2, "spread_loss": 4, "dissipate_rate": 1},
 }
 
 

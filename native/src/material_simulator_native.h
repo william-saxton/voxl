@@ -37,15 +37,15 @@ public:
 	static constexpr uint8_t MAT_STONE      = 1;
 	static constexpr uint8_t MAT_BEDROCK    = 2;
 	static constexpr uint8_t MAT_WATER_BASE = 3;
-	static constexpr uint8_t MAT_DIRT       = 11;
-	static constexpr uint8_t MAT_MUD        = 12;
-	static constexpr uint8_t MAT_LAVA_BASE  = 13;
-	static constexpr uint8_t MAT_ACID_BASE  = 21;
-	static constexpr uint8_t MAT_GAS_BASE   = 29;
+	static constexpr uint8_t MAT_DIRT       = 19;
+	static constexpr uint8_t MAT_MUD        = 20;
+	static constexpr uint8_t MAT_LAVA_BASE  = 21;
+	static constexpr uint8_t MAT_ACID_BASE  = 37;
+	static constexpr uint8_t MAT_GAS_BASE   = 53;
 	static constexpr uint8_t NOT_LOADED     = 0x7F;
 	static constexpr uint8_t NO_REACTION    = 0xFF;
 
-	static constexpr int FLUID_LEVELS    = 8;
+	static constexpr int FLUID_LEVELS    = 16;
 	static constexpr uint8_t SOURCE_FLAG = 0x80;
 	static constexpr uint8_t ID_MASK     = 0x7F;
 
@@ -102,7 +102,7 @@ private:
 	}
 	static inline bool is_gas(uint8_t id) { return fbase(id) == MAT_GAS_BASE; }
 	static inline bool is_solid(uint8_t id) { return id != MAT_AIR && !is_fluid(id) && !is_gas(id); }
-	static inline int spread_loss(uint8_t base) { return (base == MAT_LAVA_BASE) ? 2 : 1; }
+	static inline int spread_loss(uint8_t base) { return (base == MAT_LAVA_BASE) ? 4 : 2; }
 
 	// ── Chunk coordinate helpers (CHUNK = 32 = 2^5, uses arithmetic right shift) ──
 
