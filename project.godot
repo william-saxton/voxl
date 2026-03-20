@@ -118,3 +118,8 @@ debug_toggle_stress={
 [rendering]
 
 rendering_device/driver.windows="d3d12"
+
+[voxel]
+
+threads/count/minimum=4
+threads/main/time_budget_ms=12

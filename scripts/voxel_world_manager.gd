@@ -12,15 +12,44 @@ var _hud: StressTestHUD
 var _stress_test: StressTest
 
 
+var _terrain_ready_timer: float = 0.0
+var _player_unfrozen: bool = false
+
 func _ready() -> void:
 	_terrain = get_node(voxel_terrain_path) as VoxelTerrain
 	_player = get_node(player_path) as Node3D
+
+	# Scale terrain so each voxel is 0.25 world units
+	if _terrain:
+		_terrain.transform = _terrain.transform.scaled_local(
+			Vector3(MaterialRegistry.VOXEL_SCALE, MaterialRegistry.VOXEL_SCALE, MaterialRegistry.VOXEL_SCALE))
 
 	_build_voxel_library()
 	_setup_material_simulator()
 	_setup_hud()
 	_setup_stress_test()
 	_setup_interaction()
+
+
+func _process(delta: float) -> void:
+	if _player_unfrozen:
+		set_process(false)
+		return
+
+	# Poll until terrain has a solid block under the player
+	_terrain_ready_timer += delta
+	# Wait at least 2 seconds for meshes/collision to build
+	if _terrain_ready_timer < 2.0:
+		return
+
+	if _terrain and _player:
+		var tool := _terrain.get_voxel_tool()
+		var voxel_pos := MaterialRegistry.world_to_voxel(_player.global_position)
+		var below := tool.get_voxel(Vector3i(voxel_pos.x, 15, voxel_pos.z))
+		if below != MaterialRegistry.AIR:
+			(_player as VoxelPlayer).terrain_ready = true
+			_player_unfrozen = true
+			set_process(false)
 
 
 func _build_voxel_library() -> void:
@@ -33,10 +62,24 @@ func _build_voxel_library() -> void:
 	var cube_mat := StandardMaterial3D.new()
 	cube_mat.vertex_color_use_as_albedo = true
 
-	var water_fluid: VoxelBlockyFluid = load("res://resources/water_fluid.tres")
-	var lava_fluid: VoxelBlockyFluid = load("res://resources/lava_fluid.tres")
-	var acid_fluid: VoxelBlockyFluid = load("res://resources/acid_fluid.tres")
-	var gas_fluid: VoxelBlockyFluid = load("res://resources/toxic_gas_fluid.tres")
+	var water_mat := StandardMaterial3D.new()
+	water_mat.albedo_color = Color(0.2, 0.4, 0.8, 0.6)
+	water_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+
+	var lava_mat := StandardMaterial3D.new()
+	lava_mat.albedo_color = Color(1.0, 0.3, 0.0, 0.9)
+	lava_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	lava_mat.emission_enabled = true
+	lava_mat.emission = Color(1.0, 0.3, 0.0)
+	lava_mat.emission_energy_multiplier = 2.0
+
+	var acid_mat := StandardMaterial3D.new()
+	acid_mat.albedo_color = Color(0.3, 0.9, 0.1, 0.6)
+	acid_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+
+	var gas_mat := StandardMaterial3D.new()
+	gas_mat.albedo_color = Color(0.5, 0.7, 0.3, 0.3)
+	gas_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 
 	var models: Array[VoxelBlockyModel] = []
 
@@ -55,49 +98,45 @@ func _build_voxel_library() -> void:
 	bedrock.set_material_override(0, cube_mat)
 	models.append(bedrock)
 
-	# WATER levels (indices WATER_BASE .. WATER_BASE + FLUID_LEVELS - 1)
-	for i in MaterialRegistry.FLUID_LEVELS:
-		var m := VoxelBlockyModelFluid.new()
-		m.fluid = water_fluid
-		m.level = i
-		m.transparency_index = 1
-		models.append(m)
+	# Index 3: WATER
+	var water := VoxelBlockyModelCube.new()
+	water.color = Color(0.2, 0.4, 0.8, 0.6)
+	water.set_material_override(0, water_mat)
+	water.transparency_index = 1
+	models.append(water)
 
-	# Index DIRT
+	# Index 4: DIRT
 	var dirt := VoxelBlockyModelCube.new()
 	dirt.color = Color(0.55, 0.35, 0.18)
 	dirt.set_material_override(0, cube_mat)
 	models.append(dirt)
 
-	# Index MUD
+	# Index 5: MUD
 	var mud := VoxelBlockyModelCube.new()
 	mud.color = Color(0.18, 0.12, 0.08)
 	mud.set_material_override(0, cube_mat)
 	models.append(mud)
 
-	# LAVA levels
-	for i in MaterialRegistry.FLUID_LEVELS:
-		var m := VoxelBlockyModelFluid.new()
-		m.fluid = lava_fluid
-		m.level = i
-		m.transparency_index = 2
-		models.append(m)
+	# Index 6: LAVA
+	var lava := VoxelBlockyModelCube.new()
+	lava.color = Color(1.0, 0.3, 0.0, 0.9)
+	lava.set_material_override(0, lava_mat)
+	lava.transparency_index = 2
+	models.append(lava)
 
-	# ACID levels
-	for i in MaterialRegistry.FLUID_LEVELS:
-		var m := VoxelBlockyModelFluid.new()
-		m.fluid = acid_fluid
-		m.level = i
-		m.transparency_index = 3
-		models.append(m)
+	# Index 7: ACID
+	var acid := VoxelBlockyModelCube.new()
+	acid.color = Color(0.3, 0.9, 0.1, 0.6)
+	acid.set_material_override(0, acid_mat)
+	acid.transparency_index = 3
+	models.append(acid)
 
-	# GAS levels (always full visual height)
-	for i in MaterialRegistry.FLUID_LEVELS:
-		var m := VoxelBlockyModelFluid.new()
-		m.fluid = gas_fluid
-		m.level = MaterialRegistry.FLUID_LEVELS - 1
-		m.transparency_index = 4
-		models.append(m)
+	# Index 8: GAS
+	var gas := VoxelBlockyModelCube.new()
+	gas.color = Color(0.5, 0.7, 0.3, 0.3)
+	gas.set_material_override(0, gas_mat)
+	gas.transparency_index = 4
+	models.append(gas)
 
 	var library := VoxelBlockyLibrary.new()
 	library.models = models
@@ -108,6 +147,7 @@ func _build_voxel_library() -> void:
 func _setup_material_simulator() -> void:
 	_material_sim = MaterialSimulatorNative.new()
 	_material_sim.name = "MaterialSimulator"
+	_material_sim.sim_radius = 7
 	add_child(_material_sim)
 	if _terrain:
 		_material_sim.initialize(_terrain, _player)

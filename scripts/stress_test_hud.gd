@@ -32,10 +32,9 @@ func _process(_delta: float) -> void:
 
 	var fps := Engine.get_frames_per_second()
 	var active := _material_sim.get_active_cell_count()
-	var sources := _material_sim.get_source_block_count()
 	var tick_ms := _material_sim.get_last_tick_ms()
 	var changes := _material_sim.get_last_changes_count()
 
-	text = "FPS: %d\nActive Cells: %d\nSource Blocks: %d\nTick: %.2f ms\nChanges/Tick: %d" % [
-		fps, active, sources, tick_ms, changes
+	text = "FPS: %d\nActive Cells: %d\nTick: %.2f ms\nChanges/Tick: %d" % [
+		fps, active, tick_ms, changes
 	]

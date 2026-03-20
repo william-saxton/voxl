@@ -32,11 +32,15 @@ var _multi_mesh: MultiMesh
 
 const PULL_INTERVAL := 0.15
 
+# Pull radius in voxel units (world pull_radius converted)
+var _pull_radius_voxels: float
+
 
 func initialize(voxel_tool: VoxelTool, material_sim: MaterialSimulatorNative, direction: Vector3) -> void:
 	_voxel_tool = voxel_tool
 	_material_sim = material_sim
 	_direction = direction.normalized()
+	_pull_radius_voxels = pull_radius * MaterialRegistry.INV_VOXEL_SCALE
 
 
 func _ready() -> void:
@@ -106,9 +110,9 @@ func _physics_process(delta: float) -> void:
 
 func _pull_nearby_voxels() -> void:
 	var center := global_position
-	var center_i := Vector3i(center.round())
-	var ri := int(ceil(pull_radius))
-	var radius_sq := pull_radius * pull_radius
+	var center_v := MaterialRegistry.world_to_voxel(center)
+	var ri := int(ceil(_pull_radius_voxels))
+	var radius_sq := _pull_radius_voxels * _pull_radius_voxels
 
 	for dx in range(-ri, ri + 1):
 		for dy in range(-ri, ri + 1):
@@ -120,7 +124,7 @@ func _pull_nearby_voxels() -> void:
 				if offset.length_squared() > radius_sq:
 					continue
 
-				var vpos := center_i + Vector3i(dx, dy, dz)
+				var vpos := center_v + Vector3i(dx, dy, dz)
 				var voxel := _voxel_tool.get_voxel(vpos)
 
 				if voxel == MaterialRegistry.AIR or voxel == MaterialRegistry.BEDROCK:
@@ -266,9 +270,9 @@ func _resolve_landing(idx: int) -> void:
 	var vel: Vector3 = d["vel"]
 	var start: Vector3 = d["start_pos"]
 	var lt: float = d["land_time"]
-	var land_x := start.x + vel.x * lt
-	var land_z := start.z + vel.z * lt
-	d["land_pos"] = _find_landing_spot(Vector3i(roundi(land_x), roundi(start.y) + 8, roundi(land_z)))
+	var land_world := Vector3(start.x + vel.x * lt, start.y + 2.0, start.z + vel.z * lt)
+	var land_v := MaterialRegistry.world_to_voxel(land_world)
+	d["land_pos"] = _find_landing_spot(land_v)
 
 
 func _place_debris_voxel(voxel_id: int, place_pos: Vector3i) -> void:
@@ -287,13 +291,13 @@ func _force_place_remaining() -> void:
 
 
 func _find_landing_spot(pos: Vector3i) -> Vector3i:
-	# Fast path: flat terrain has dirt at y=0, air at y=1
-	var ground := Vector3i(pos.x, 0, pos.z)
-	var air := Vector3i(pos.x, 1, pos.z)
+	# Fast path: flat terrain has dirt at voxel y=0, air at y=1
+	var ground := Vector3i(pos.x, 15, pos.z)
+	var air := Vector3i(pos.x, 16, pos.z)
 	if MaterialRegistry.is_solid(_voxel_tool.get_voxel(ground)) and MaterialRegistry.is_passable(_voxel_tool.get_voxel(air)):
 		return air
 
-	for y in range(pos.y + 8, pos.y - 20, -1):
+	for y in range(pos.y + 32, pos.y - 80, -1):
 		var check := Vector3i(pos.x, y, pos.z)
 		var above := Vector3i(pos.x, y + 1, pos.z)
 		if MaterialRegistry.is_solid(_voxel_tool.get_voxel(check)) and MaterialRegistry.is_passable(_voxel_tool.get_voxel(above)):
@@ -308,12 +312,10 @@ static func _get_voxel_color(voxel_id: int) -> Color:
 		return Color(0.55, 0.35, 0.18)
 	if voxel_id == MaterialRegistry.MUD:
 		return Color(0.18, 0.12, 0.08)
-	if MaterialRegistry.is_fluid(voxel_id):
-		var base := MaterialRegistry.fluid_base(voxel_id)
-		if base == MaterialRegistry.WATER_BASE:
-			return Color(0.2, 0.4, 0.8)
-		if base == MaterialRegistry.LAVA_BASE:
-			return Color(1.0, 0.3, 0.0)
-		if base == MaterialRegistry.ACID_BASE:
-			return Color(0.3, 0.9, 0.1)
+	if voxel_id == MaterialRegistry.WATER:
+		return Color(0.2, 0.4, 0.8)
+	if voxel_id == MaterialRegistry.LAVA:
+		return Color(1.0, 0.3, 0.0)
+	if voxel_id == MaterialRegistry.ACID:
+		return Color(0.3, 0.9, 0.1)
 	return Color(0.5, 0.5, 0.5)
