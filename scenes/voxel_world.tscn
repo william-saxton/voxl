@@ -38,9 +38,9 @@ transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0
 shadow_enabled = true
 
 [node name="VoxelTerrain" type="VoxelTerrain" parent="." unique_id=1795192942]
-max_view_distance = 512
-mesh_block_size = 32
+max_view_distance = 256
 run_stream_in_editor = false
+mesh_block_size = 32
 generator = SubResource("VoxelGeneratorScript_mko3u")
 mesher = SubResource("VoxelMesherBlocky_1")
 
@@ -71,6 +71,7 @@ offset = Vector3(30, 40, 30)
 script = ExtResource("world_manager_script")
 voxel_terrain_path = NodePath("../VoxelTerrain")
 player_path = NodePath("../Player")
+world_map_path = "uid://cja5dasnwpo58"
 
 [node name="VoxelInteraction" type="Node" parent="VoxelWorldManager" unique_id=509755928]
 script = ExtResource("interaction_script")

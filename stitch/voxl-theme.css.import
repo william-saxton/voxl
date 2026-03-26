@@ -1,0 +1,14 @@
+[remap]
+
+importer="Godot CSS Importer"
+type="Theme"
+uid="uid://lix3r6v8eyse"
+path="res://.godot/imported/voxl-theme.css-291f6e1b344c7a16df748521e1e089eb.tres"
+
+[deps]
+
+source_file="res://stitch/voxl-theme.css"
+dest_files=["res://.godot/imported/voxl-theme.css-291f6e1b344c7a16df748521e1e089eb.tres"]
+
+[params]
+

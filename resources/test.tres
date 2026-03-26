@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="WorldMap" format=3 uid="uid://c8am60eb1ug0i"]
+
+[ext_resource type="Script" uid="uid://b2ixdpsxed18g" path="res://scripts/wfc/biome_def.gd" id="1_wutgo"]
+[ext_resource type="Script" uid="uid://cydvqwoxe4gm7" path="res://scripts/wfc/world_map.gd" id="2_i24s5"]
+
+[sub_resource type="Resource" id="Resource_6xq1d"]
+script = ExtResource("1_wutgo")
+biome_name = "stone_cavern"
+color = Color(0.5, 0.5, 0.55, 1)
+
+[sub_resource type="Resource" id="Resource_xaijj"]
+script = ExtResource("1_wutgo")
+biome_name = "dirt_plains"
+color = Color(0.55, 0.35, 0.18, 1)
+surface_material = 4
+
+[sub_resource type="Resource" id="Resource_fqwic"]
+script = ExtResource("1_wutgo")
+biome_name = "lava_forge"
+color = Color(0.9, 0.3, 0.1, 1)
+surface_material = 6
+
+[resource]
+script = ExtResource("2_i24s5")
+biome_palette = Array[ExtResource("1_wutgo")]([SubResource("Resource_6xq1d"), SubResource("Resource_xaijj"), SubResource("Resource_fqwic")])

@@ -1,5 +1,7 @@
 #include "register_types.h"
 #include "material_simulator_native.h"
+#include "wfc_solver.h"
+#include "voxel_editor_native.h"
 
 using namespace godot;
 
@@ -8,6 +10,8 @@ void initialize_voxl_native(ModuleInitializationLevel p_level) {
 		return;
 	}
 	ClassDB::register_class<MaterialSimulatorNative>();
+	ClassDB::register_class<WFCSolver>();
+	ClassDB::register_class<VoxelEditorNative>();
 }
 
 void uninitialize_voxl_native(ModuleInitializationLevel p_level) {

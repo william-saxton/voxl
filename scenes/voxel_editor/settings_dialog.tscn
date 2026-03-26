@@ -1,0 +1,8 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/voxel_editor/ui/settings_dialog.gd" id="1"]
+
+[node name="SettingsDialog" type="AcceptDialog"]
+title = "Tile Settings"
+min_size = Vector2i(400, 500)
+script = ExtResource("1")

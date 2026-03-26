@@ -88,7 +88,7 @@ void MaterialSimulatorNative::place_fluid(const Vector3i &pos, int fluid_id) {
 	if (_voxel_tool.is_null()) return;
 	_voxel_tool->call("set_voxel", pos, fluid_id);
 	if (_sim_ready) {
-		_write_cell(pos, static_cast<uint8_t>(fluid_id));
+		_write_cell(pos, static_cast<uint16_t>(fluid_id));
 	}
 }
 
@@ -102,7 +102,7 @@ void MaterialSimulatorNative::remove_voxel(const Vector3i &pos) {
 
 void MaterialSimulatorNative::sync_voxel(const Vector3i &pos, int voxel_id) {
 	if (_sim_ready) {
-		_write_cell(pos, static_cast<uint8_t>(voxel_id));
+		_write_cell(pos, static_cast<uint16_t>(voxel_id));
 	}
 }
 
@@ -147,7 +147,7 @@ MaterialSimulatorNative::SimChunk *MaterialSimulatorNative::_chunk_at(int cx, in
 
 // ── Buffer writes (main thread, between ticks) ──
 
-void MaterialSimulatorNative::_write_cell(const Vector3i &world_pos, uint8_t val) {
+void MaterialSimulatorNative::_write_cell(const Vector3i &world_pos, uint16_t val) {
 	int wy = world_pos.y - _origin_y;
 	if (wy < 0 || wy >= CHUNK_Y) return;
 
@@ -187,8 +187,8 @@ void MaterialSimulatorNative::_init_grid() {
 			c->wcx = _center_cx - _sim_radius + gx;
 			c->wcz = _center_cz - _sim_radius + gz;
 			c->state = SimChunk::UNLOADED;
-			std::memset(c->buf_a, NOT_LOADED, CHUNK_VOL);
-			std::memset(c->buf_b, NOT_LOADED, CHUNK_VOL);
+			std::fill(c->buf_a, c->buf_a + CHUNK_VOL, NOT_LOADED);
+			std::fill(c->buf_b, c->buf_b + CHUNK_VOL, NOT_LOADED);
 			c->current = c->buf_a;
 			c->next_buf = c->buf_b;
 			_grid_at(gx, gz) = c;
@@ -274,20 +274,20 @@ void MaterialSimulatorNative::_loader_thread_func(int loader_id) {
 		result->wcx = req.wcx;
 		result->wcz = req.wcz;
 
-		// Generate flat terrain directly in C++ — no VoxelTerrain reads needed.
-		// Build one Z-slice template, then memcpy it for all Z values.
-		uint8_t slice[CHUNK_X * CHUNK_Y];
+		// Generate flat terrain directly in C++.
+		// Build one Z-slice template, then copy it for all Z values.
+		uint16_t slice[CHUNK_X * CHUNK_Y];
 		for (int ly = 0; ly < CHUNK_Y; ly++) {
 			int world_y = _origin_y + ly;
-			uint8_t mat;
+			uint16_t mat;
 			if (world_y <= 0)       mat = MAT_BEDROCK;
 			else if (world_y <= 14) mat = MAT_STONE;
 			else if (world_y == 15) mat = MAT_DIRT;
 			else                    mat = MAT_AIR;
-			std::memset(&slice[ly * CHUNK_X], mat, CHUNK_X);
+			std::fill(&slice[ly * CHUNK_X], &slice[(ly + 1) * CHUNK_X], mat);
 		}
 		for (int lz = 0; lz < CHUNK_Z; lz++) {
-			std::memcpy(&result->data[lz * CHUNK_X * CHUNK_Y], slice, CHUNK_X * CHUNK_Y);
+			std::memcpy(&result->data[lz * CHUNK_X * CHUNK_Y], slice, CHUNK_X * CHUNK_Y * sizeof(uint16_t));
 		}
 
 		{
@@ -318,8 +318,8 @@ void MaterialSimulatorNative::_drain_loader_results() {
 	for (auto *result : _loader_results) {
 		SimChunk *c = result->chunk;
 		if (c->state == SimChunk::LOADING && c->wcx == result->wcx && c->wcz == result->wcz) {
-			std::memcpy(c->current, result->data, CHUNK_VOL);
-			std::memcpy(c->next_buf, result->data, CHUNK_VOL);
+			std::memcpy(c->current, result->data, CHUNK_VOL * sizeof(uint16_t));
+			std::memcpy(c->next_buf, result->data, CHUNK_VOL * sizeof(uint16_t));
 			c->state = SimChunk::LOADED;
 		}
 		delete result;
@@ -404,8 +404,8 @@ void MaterialSimulatorNative::_recenter_grid() {
 			c->wcx = wcx;
 			c->wcz = wcz;
 			c->state = SimChunk::LOADING;
-			std::memset(c->buf_a, NOT_LOADED, CHUNK_VOL);
-			std::memset(c->buf_b, NOT_LOADED, CHUNK_VOL);
+			std::fill(c->buf_a, c->buf_a + CHUNK_VOL, NOT_LOADED);
+			std::fill(c->buf_b, c->buf_b + CHUNK_VOL, NOT_LOADED);
 			c->current = c->buf_a;
 			c->next_buf = c->buf_b;
 			_grid_at(gx, gz) = c;
@@ -471,7 +471,7 @@ void MaterialSimulatorNative::_dispatch_tick() {
 	}
 
 	for (auto *c : loaded)
-		std::memcpy(c->next_buf, c->current, CHUNK_VOL);
+		std::memcpy(c->next_buf, c->current, CHUNK_VOL * sizeof(uint16_t));
 
 	int parity = _tick_count % 2;
 	int num_chunks = (int)loaded.size();
@@ -551,8 +551,8 @@ void MaterialSimulatorNative::_collect_and_apply_changes() {
 			}
 
 			for (int i = 0; i < CHUNK_VOL; i++) {
-				uint8_t old_id = c->current[i];
-				uint8_t new_id = c->next_buf[i];
+				uint16_t old_id = c->current[i];
+				uint16_t new_id = c->next_buf[i];
 				if (old_id == new_id) continue;
 
 				total++;
@@ -600,7 +600,7 @@ void MaterialSimulatorNative::_process_deferred_changes() {
 			if (!c || c->state != SimChunk::LOADED) continue;
 			int lx = _local_coord(dc.world_pos.x), lz = _local_coord(dc.world_pos.z);
 			int idx = lx + wy * CHUNK_X + lz * CHUNK_X * CHUNK_Y;
-			if (c->current[idx] != (uint8_t)dc.new_type) continue;
+			if (c->current[idx] != (uint16_t)dc.new_type) continue;
 		}
 
 		if (!_voxel_set(dc.world_pos, dc.new_type)) continue;
@@ -611,48 +611,52 @@ void MaterialSimulatorNative::_process_deferred_changes() {
 
 // ── Simulation functions ──
 
-uint8_t MaterialSimulatorNative::_react(int x, int y, int z, uint8_t my_id) {
+uint16_t MaterialSimulatorNative::_react(int x, int y, int z, uint16_t my_id) {
 	const int dirs[6][3] = {
 		{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}
 	};
 
+	uint8_t my_base = base_material(my_id);
+
 	for (int i = 0; i < 6; i++) {
 		int nx = x + dirs[i][0], ny = y + dirs[i][1], nz = z + dirs[i][2];
-		uint8_t ni = _read_raw(nx, ny, nz);
-		if (ni == MAT_AIR || ni == NOT_LOADED) continue;
+		uint16_t ni = _read_raw(nx, ny, nz);
+		uint8_t ni_base = base_material(ni);
+		if (ni_base == MAT_AIR || ni == NOT_LOADED) continue;
 
-		if (my_id == MAT_WATER && ni == MAT_LAVA) {
+		if (my_base == MAT_WATER && ni_base == MAT_LAVA) {
 			_write_next(nx, ny, nz, MAT_STONE);
 			return MAT_AIR;
 		}
-		if (my_id == MAT_LAVA && ni == MAT_WATER) {
+		if (my_base == MAT_LAVA && ni_base == MAT_WATER) {
 			_write_next(nx, ny, nz, MAT_AIR);
 			return MAT_STONE;
 		}
-		if (my_id == MAT_WATER && ni == MAT_ACID) {
+		if (my_base == MAT_WATER && ni_base == MAT_ACID) {
 			_write_next(nx, ny, nz, MAT_GAS);
 			return MAT_GAS;
 		}
-		if (my_id == MAT_ACID && ni == MAT_WATER) {
+		if (my_base == MAT_ACID && ni_base == MAT_WATER) {
 			_write_next(nx, ny, nz, MAT_GAS);
 			return MAT_GAS;
 		}
-		if (my_id == MAT_DIRT && ni == MAT_WATER) {
+		if (my_base == MAT_DIRT && ni_base == MAT_WATER) {
 			return MAT_MUD;
 		}
 	}
 	return NO_REACTION;
 }
 
-void MaterialSimulatorNative::_sim_fluid(int x, int y, int z, uint8_t id) {
+void MaterialSimulatorNative::_sim_fluid(int x, int y, int z, uint16_t id) {
+	uint8_t id_base = base_material(id);
 	// Lava ticks slower
-	if (id == MAT_LAVA && (_tick_count % 3) != 0) {
+	if (id_base == MAT_LAVA && (_tick_count % 3) != 0) {
 		_write_next(x, y, z, id);
 		return;
 	}
 
 	// Check reactions
-	uint8_t rx = _react(x, y, z, id);
+	uint16_t rx = _react(x, y, z, id);
 	if (rx != NO_REACTION) {
 		_write_next(x, y, z, rx);
 		return;
@@ -666,10 +670,10 @@ void MaterialSimulatorNative::_sim_fluid(int x, int y, int z, uint8_t id) {
 	uint32_t hash = static_cast<uint32_t>(
 		(x * 73856093) ^ (y * 19349663) ^ (z * 83492791) ^ (_tick_count * 2654435761u));
 
-	uint8_t below = _read_raw(x, y - 1, z);
+	uint16_t below = _read_raw(x, y - 1, z);
 
 	// 1. Fall straight down into air
-	if (below == MAT_AIR) {
+	if (base_material(below) == MAT_AIR) {
 		_write_next(x, y - 1, z, id);
 		_write_next(x, y, z, MAT_AIR);
 		return;
@@ -703,10 +707,10 @@ void MaterialSimulatorNative::_sim_fluid(int x, int y, int z, uint8_t id) {
 	for (int i = 0; i < 8; i++) {
 		int di = (start + i) & 7;
 		int nx = x + dirs8[di][0], nz = z + dirs8[di][1];
-		uint8_t side = _read_raw(nx, y, nz);
+		uint16_t side = _read_raw(nx, y, nz);
 		if (is_solid(side) || side == NOT_LOADED) continue;
-		uint8_t diag = _read_raw(nx, y - 1, nz);
-		if (diag == MAT_AIR) {
+		uint16_t diag = _read_raw(nx, y - 1, nz);
+		if (base_material(diag) == MAT_AIR) {
 			if (dbg) UtilityFunctions::print(String("[FLUID_DBG] 4a: move diag-down to ({0},{1},{2})")
 				.format(Array::make(nx, y - 1, nz)));
 			_write_next_if_unchanged(nx, y - 1, nz, id);
@@ -722,10 +726,10 @@ void MaterialSimulatorNative::_sim_fluid(int x, int y, int z, uint8_t id) {
 	for (int i = 0; i < 8; i++) {
 		int di = (start + i) & 7;
 		int nx = x + dirs8[di][0], nz = z + dirs8[di][1];
-		uint8_t side = _read_raw(nx, y, nz);
-		if (side != MAT_AIR) continue;
-		uint8_t side_below = _read_raw(nx, y - 1, nz);
-		if (side_below == MAT_AIR || is_gas(side_below)) {
+		uint16_t side = _read_raw(nx, y, nz);
+		if (base_material(side) != MAT_AIR) continue;
+		uint16_t side_below = _read_raw(nx, y - 1, nz);
+		if (base_material(side_below) == MAT_AIR || is_gas(side_below)) {
 			if (dbg) UtilityFunctions::print(String("[FLUID_DBG] 4b: move to ({0},{1},{2})")
 				.format(Array::make(nx, y, nz)));
 			_write_next_if_unchanged(nx, y, nz, id);
@@ -739,7 +743,7 @@ void MaterialSimulatorNative::_sim_fluid(int x, int y, int z, uint8_t id) {
 	// 4c. Spread to any air neighbor (one random dir, anti-jitter)
 	int dir = (hash >> 6) & 7;
 	int nx = x + dirs8[dir][0], nz = z + dirs8[dir][1];
-	if (_read_raw(nx, y, nz) == MAT_AIR) {
+	if (base_material(_read_raw(nx, y, nz)) == MAT_AIR) {
 		if (dbg) UtilityFunctions::print(String("[FLUID_DBG] 4c: spread to ({0},{1},{2})")
 			.format(Array::make(nx, y, nz)));
 		_write_next_if_unchanged(nx, y, nz, id);
@@ -753,7 +757,7 @@ void MaterialSimulatorNative::_sim_fluid(int x, int y, int z, uint8_t id) {
 	_write_next(x, y, z, id);
 }
 
-void MaterialSimulatorNative::_sim_gas(int x, int y, int z, uint8_t id) {
+void MaterialSimulatorNative::_sim_gas(int x, int y, int z, uint16_t id) {
 	// Gas ticks every other pair of ticks
 	if ((_tick_count >> 1) % 2 != 0) {
 		_write_next(x, y, z, id);
@@ -769,9 +773,9 @@ void MaterialSimulatorNative::_sim_gas(int x, int y, int z, uint8_t id) {
 	}
 
 	// Rise: check above
-	uint8_t above = _read_raw(x, y + 1, z);
+	uint16_t above = _read_raw(x, y + 1, z);
 
-	if (above == MAT_AIR) {
+	if (base_material(above) == MAT_AIR) {
 		_write_next(x, y + 1, z, id);
 		_write_next(x, y, z, MAT_AIR);
 		return;
@@ -789,7 +793,7 @@ void MaterialSimulatorNative::_sim_gas(int x, int y, int z, uint8_t id) {
 	for (int i = 0; i < 4; i++) {
 		int di = (start_dir + i) & 3;
 		int nx = x + cd[di][0], nz = z + cd[di][2];
-		if (_read_raw(nx, y, nz) == MAT_AIR) {
+		if (base_material(_read_raw(nx, y, nz)) == MAT_AIR) {
 			_write_next_if_unchanged(nx, y, nz, id);
 			_write_next(x, y, z, MAT_AIR);
 			return;
@@ -801,14 +805,15 @@ void MaterialSimulatorNative::_sim_gas(int x, int y, int z, uint8_t id) {
 }
 
 void MaterialSimulatorNative::_sim_cell(int x, int y, int z) {
-	uint8_t id = _read_raw(x, y, z);
+	uint16_t id = _read_raw(x, y, z);
+	uint8_t id_base = base_material(id);
 
-	if (id == MAT_AIR || id == MAT_BEDROCK || id == NOT_LOADED) {
+	if (id_base == MAT_AIR || id_base == MAT_BEDROCK || id == NOT_LOADED) {
 		return;
 	}
 
 	if (is_solid(id)) {
-		uint8_t rx = _react(x, y, z, id);
+		uint16_t rx = _react(x, y, z, id);
 		if (rx != NO_REACTION) {
 			_write_next(x, y, z, rx);
 		}

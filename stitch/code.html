@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>VOXL | Voxel Editor Workspace</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "on-secondary-container": "#bda8ff",
+                        "on-surface-variant": "#cbc3d8",
+                        "surface-bright": "#3b3743",
+                        "surface-container-highest": "#36333e",
+                        "on-error": "#690005",
+                        "surface-variant": "#36333e",
+                        "background": "#14121c",
+                        "tertiary-fixed-dim": "#9acbff",
+                        "secondary-fixed-dim": "#cdbdff",
+                        "outline": "#948ea1",
+                        "on-secondary": "#362071",
+                        "tertiary-container": "#0075bb",
+                        "on-primary-container": "#f9f3ff",
+                        "outline-variant": "#494455",
+                        "on-error-container": "#ffdad6",
+                        "primary-fixed": "#e8ddff",
+                        "tertiary": "#9acbff",
+                        "on-tertiary-fixed": "#001d34",
+                        "on-tertiary": "#003355",
+                        "surface-container-high": "#2b2833",
+                        "on-background": "#e6e0ee",
+                        "surface-container-low": "#1d1a24",
+                        "on-primary-fixed": "#20005e",
+                        "primary-container": "#7b4afd",
+                        "error": "#ffb4ab",
+                        "secondary-fixed": "#e8ddff",
+                        "error-container": "#93000a",
+                        "surface-tint": "#cdbdff",
+                        "surface": "#14121c",
+                        "on-secondary-fixed": "#20025d",
+                        "surface-container": "#211e28",
+                        "primary-fixed-dim": "#cdbdff",
+                        "tertiary-fixed": "#cfe5ff",
+                        "on-primary-fixed-variant": "#5000cf",
+                        "inverse-primary": "#6932ea",
+                        "on-secondary-fixed-variant": "#4c3889",
+                        "surface-container-lowest": "#0f0d16",
+                        "inverse-on-surface": "#322f3a",
+                        "on-tertiary-container": "#f1f6ff",
+                        "on-primary": "#370095",
+                        "secondary-container": "#4c3889",
+                        "on-tertiary-fixed-variant": "#004a78",
+                        "primary": "#cdbdff",
+                        "surface-dim": "#14121c",
+                        "inverse-surface": "#e6e0ee",
+                        "secondary": "#cdbdff",
+                        "on-surface": "#e6e0ee"
+                    },
+                    fontFamily: {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"],
+                        "mono": ["JetBrains Mono"]
+                    },
+                    borderRadius: { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" },
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .viewport-grid {
+            background-image: 
+                linear-gradient(to right, rgba(125, 76, 255, 0.1) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(125, 76, 255, 0.1) 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1d1a24;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #494455;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body selection:bg-primary-container selection:text-on-primary-container overflow-hidden h-screen flex flex-col">
+<!-- TopNavBar -->
+<header class="fixed top-0 w-full h-10 flex items-center px-4 z-50 bg-slate-900 dark:bg-zinc-950 border-b border-zinc-800 flat no shadows">
+<div class="text-lg font-black tracking-tighter text-violet-500 dark:text-violet-400 mr-8">VOXL</div>
+<nav class="flex h-full items-center space-x-1">
+<a class="px-3 py-1 font-sans text-xs uppercase tracking-wider font-semibold text-violet-400 border-b border-violet-500 hover:bg-zinc-800 hover:text-white transition-colors active:opacity-80 duration-100" href="#">File</a>
+<a class="px-3 py-1 font-sans text-xs uppercase tracking-wider font-semibold text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors active:opacity-80 duration-100" href="#">Edit</a>
+<a class="px-3 py-1 font-sans text-xs uppercase tracking-wider font-semibold text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors active:opacity-80 duration-100" href="#">Viewport</a>
+<a class="px-3 py-1 font-sans text-xs uppercase tracking-wider font-semibold text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors active:opacity-80 duration-100" href="#">Selection</a>
+<a class="px-3 py-1 font-sans text-xs uppercase tracking-wider font-semibold text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors active:opacity-80 duration-100" href="#">Render</a>
+</nav>
+<div class="ml-auto flex items-center space-x-3">
+<button class="material-symbols-outlined text-zinc-400 hover:text-white text-sm">settings</button>
+<button class="material-symbols-outlined text-zinc-400 hover:text-white text-sm">help</button>
+<button class="material-symbols-outlined text-zinc-400 hover:text-white text-sm">account_circle</button>
+</div>
+</header>
+<!-- Context Properties Panel (Below Header) -->
+<div class="fixed top-10 w-full h-10 bg-surface-container-low border-b border-outline-variant flex flex-col z-40">
+<div class="flex items-center h-full px-4 space-x-6">
+<div class="flex items-center space-x-2">
+<span class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Brush:</span>
+<div class="flex bg-surface-container-highest rounded p-0.5">
+<button class="px-2 py-0.5 text-[10px] bg-primary-container text-on-primary-container rounded shadow-sm">Standard</button>
+<button class="px-2 py-0.5 text-[10px] text-zinc-400 hover:text-zinc-200">Noise</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Main Workspace Layout -->
+<main class="flex-1 flex mt-20 mb-16 relative">
+<!-- SideNavBar (Left tools) -->
+<aside class="fixed left-0 top-10 h-[calc(100vh-84px)] flex flex-col items-start py-4 z-40 bg-zinc-900 dark:bg-zinc-950 border-r border-zinc-800 w-28 shadow-xl">
+<div class="flex flex-col items-center gap-2 w-full px-2">
+<!-- Tool Header -->
+<div class="text-[8px] font-black text-zinc-600 mb-1 w-full px-2">TOOLS</div>
+<div class="flex gap-2 px-2">
+<!-- Column 1: Main Action Tabs -->
+<div class="flex flex-col gap-1">
+<button class="w-10 h-10 flex items-center justify-center rounded-lg bg-violet-600/20 text-violet-400 border-l-2 border-violet-500 hover:bg-zinc-800 transition-transform active:scale-95">
+<span class="material-symbols-outlined" data-icon="add_box">add_box</span>
+</button>
+<button class="w-10 h-10 flex items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition-transform active:scale-95">
+<span class="material-symbols-outlined" data-icon="indeterminate_check_box">indeterminate_check_box</span>
+</button>
+<button class="w-10 h-10 flex items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition-transform active:scale-95">
+<span class="material-symbols-outlined" data-icon="brush">brush</span>
+</button>
+<button class="w-10 h-10 flex items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition-transform active:scale-95">
+<span class="material-symbols-outlined" data-icon="select_all">select_all</span>
+</button>
+<button class="w-10 h-10 flex items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition-transform active:scale-95">
+<span class="material-symbols-outlined" data-icon="category">category</span>
+</button>
+</div>
+<!-- Column 2: Sub-tool group (Shapes) -->
+<div class="flex flex-col gap-1.5 p-1.5 bg-zinc-800/40 rounded-lg border border-zinc-800 h-fit">
+<button class="p-1 rounded bg-zinc-800 text-zinc-300 border border-zinc-700 hover:text-white transition-colors"><span class="material-symbols-outlined text-sm">square</span></button>
+<button class="p-1 rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"><span class="material-symbols-outlined text-sm">timeline</span></button>
+<button class="p-1 rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"><span class="material-symbols-outlined text-sm">check_box_outline_blank</span></button>
+</div>
+</div>
+<div class="w-full h-[1px] bg-zinc-800 my-2"></div>
+<!-- Bottom tools -->
+<div class="mt-auto flex flex-col items-center gap-4 w-full">
+<div class="flex flex-col gap-1 border border-zinc-800 rounded p-1">
+<button class="w-6 h-6 flex items-center justify-center text-[10px] font-bold text-violet-400 bg-violet-500/10 rounded">X</button>
+<button class="w-6 h-6 flex items-center justify-center text-[10px] font-bold text-zinc-600 hover:text-zinc-400">Y</button>
+<button class="w-6 h-6 flex items-center justify-center text-[10px] font-bold text-zinc-600 hover:text-zinc-400">Z</button>
+</div>
+<button class="w-10 h-10 flex items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800 transition-transform active:scale-95">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+</button>
+</div>
+</div>
+</aside>
+<!-- Viewport Area -->
+<div class="ml-28 mr-[256px] flex-1 bg-zinc-950 relative overflow-hidden group">
+<!-- Floor Grid and 3D Visuals -->
+<div class="absolute inset-0 viewport-grid opacity-20 pointer-events-none"></div>
+<!-- Voxel Model Placeholder Center -->
+<div class="absolute inset-0 flex items-center justify-center">
+<div class="relative w-64 h-64 perspective-[1000px]">
+<!-- Symmetry Plane (Translucent) -->
+<div class="absolute inset-x-0 h-full w-[1px] bg-violet-500/40 left-1/2 z-10 shadow-[0_0_15px_rgba(125,76,255,0.3)]"></div>
+<!-- Orange Boundary Box -->
+<div class="absolute inset-0 border-2 border-dashed border-orange-500/50 rounded-lg">
+<div class="absolute -top-2 -left-2 w-4 h-4 border-t-2 border-l-2 border-orange-500"></div>
+<div class="absolute -top-2 -right-2 w-4 h-4 border-t-2 border-r-2 border-orange-500"></div>
+<div class="absolute -bottom-2 -left-2 w-4 h-4 border-b-2 border-l-2 border-orange-500"></div>
+<div class="absolute -bottom-2 -right-2 w-4 h-4 border-b-2 border-r-2 border-orange-500"></div>
+</div>
+<!-- Voxel Block Construction -->
+<div class="w-full h-full flex items-center justify-center">
+<div class="grid grid-cols-4 grid-rows-4 gap-1 w-48 h-48 rotate-x-[45deg] rotate-z-[45deg] transform-style-3d">
+<div class="w-10 h-10 bg-primary-container shadow-[2px_2px_0_rgba(0,0,0,0.5)] rounded-sm"></div>
+<div class="w-10 h-10 bg-primary shadow-[2px_2px_0_rgba(0,0,0,0.5)] rounded-sm"></div>
+<div class="w-10 h-10 bg-primary-container shadow-[2px_2px_0_rgba(0,0,0,0.5)] rounded-sm"></div>
+<div class="w-10 h-10 bg-primary shadow-[2px_2px_0_rgba(0,0,0,0.5)] rounded-sm"></div>
+<div class="w-10 h-10 bg-primary-container shadow-[2px_2px_0_rgba(0,0,0,0.5)] rounded-sm opacity-50"></div>
+<div class="w-10 h-10 border border-violet-500/30"></div>
+<div class="w-10 h-10 border border-violet-500/30"></div>
+<div class="w-10 h-10 bg-primary shadow-[2px_2px_0_rgba(0,0,0,0.5)] rounded-sm"></div>
+<div class="w-10 h-10 bg-primary shadow-[2px_2px_0_rgba(0,0,0,0.5)] rounded-sm"></div>
+<div class="w-10 h-10 bg-primary-container shadow-[2px_2px_0_rgba(0,0,0,0.5)] rounded-sm"></div>
+<div class="w-10 h-10 border border-violet-500/30"></div>
+<div class="w-10 h-10 bg-primary shadow-[2px_2px_0_rgba(0,0,0,0.5)] rounded-sm"></div>
+<div class="w-10 h-10 border border-violet-500/30"></div>
+<div class="w-10 h-10 border border-violet-500/30"></div>
+<div class="w-10 h-10 bg-primary-container shadow-[2px_2px_0_rgba(0,0,0,0.5)] rounded-sm"></div>
+<div class="w-10 h-10 bg-primary shadow-[2px_2px_0_rgba(0,0,0,0.5)] rounded-sm"></div>
+</div>
+</div>
+</div>
+</div>
+<div class="absolute top-4 right-4 text-right">
+<div class="text-[10px] font-mono text-zinc-500">Perspective | 35mm</div>
+<div class="text-[10px] font-mono text-violet-500">Render: Real-time PBR</div>
+</div>
+</div>
+<!-- Right Side Panel (Palette & Tile Props) -->
+<aside class="fixed right-0 top-10 h-[calc(100vh-84px)] w-64 bg-surface-container-low border-l border-outline-variant flex flex-col z-40">
+<!-- Palette Editor -->
+<div class="p-4 border-b border-outline-variant overflow-y-auto max-h-[45vh]">
+<div class="flex items-center justify-between mb-3">
+<span class="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Palette</span>
+<button class="text-[10px] text-primary hover:underline">Vaporwave_v2</button>
+</div>
+<div class="space-y-4">
+<!-- Stone -->
+<div>
+<div class="text-[9px] text-zinc-500 font-bold uppercase mb-1.5 flex justify-between items-center">Stone <button class="hover:text-primary transition-colors"><span class="material-symbols-outlined text-[12px]">add</span></button></div>
+<div class="grid grid-cols-6 gap-1">
+<div class="w-8 h-8 bg-zinc-600 border border-white/10 rounded-sm cursor-pointer hover:border-white/30"></div>
+<div class="w-8 h-8 bg-zinc-500 border border-white/10 rounded-sm cursor-pointer hover:border-white/30"></div>
+<div class="w-8 h-8 bg-zinc-700 border border-white/10 rounded-sm cursor-pointer hover:border-white/30"></div>
+<button class="w-8 h-8 flex items-center justify-center border border-dashed border-zinc-700 rounded-sm hover:bg-zinc-800 transition-colors">
+<span class="material-symbols-outlined text-zinc-600 text-[14px]">add</span>
+</button>
+</div>
+</div>
+<!-- Bedrock -->
+<div>
+<div class="text-[9px] text-zinc-500 font-bold uppercase mb-1.5 flex justify-between items-center">Bedrock <button class="hover:text-primary transition-colors"><span class="material-symbols-outlined text-[12px]">add</span></button></div>
+<div class="grid grid-cols-6 gap-1">
+<div class="w-8 h-8 bg-zinc-800 border border-white/10 rounded-sm cursor-pointer hover:border-white/30"></div>
+<div class="w-8 h-8 bg-zinc-900 border border-white/10 rounded-sm cursor-pointer hover:border-white/30"></div>
+<button class="w-8 h-8 flex items-center justify-center border border-dashed border-zinc-700 rounded-sm hover:bg-zinc-800 transition-colors">
+<span class="material-symbols-outlined text-zinc-600 text-[14px]">add</span>
+</button>
+</div>
+</div>
+<!-- Water -->
+<div>
+<div class="text-[9px] text-zinc-500 font-bold uppercase mb-1.5 flex justify-between items-center">Water <button class="hover:text-primary transition-colors"><span class="material-symbols-outlined text-[12px]">add</span></button></div>
+<div class="grid grid-cols-6 gap-1">
+<div class="w-8 h-8 bg-cyan-600 border border-white/10 rounded-sm cursor-pointer hover:border-white/30"></div>
+<div class="w-8 h-8 bg-blue-500 border border-white/10 rounded-sm cursor-pointer hover:border-white/30"></div>
+<div class="w-8 h-8 bg-cyan-900 border border-white/10 rounded-sm cursor-pointer hover:border-white/30"></div>
+<button class="w-8 h-8 flex items-center justify-center border border-dashed border-zinc-700 rounded-sm hover:bg-zinc-800 transition-colors">
+<span class="material-symbols-outlined text-zinc-600 text-[14px]">add</span>
+</button>
+</div>
+</div>
+<!-- Foliage -->
+<div>
+<div class="text-[9px] text-zinc-500 font-bold uppercase mb-1.5 flex justify-between items-center">Foliage <button class="hover:text-primary transition-colors"><span class="material-symbols-outlined text-[12px]">add</span></button></div>
+<div class="grid grid-cols-6 gap-1">
+<div class="w-8 h-8 bg-emerald-700 border border-white/10 rounded-sm cursor-pointer hover:border-white/30"></div>
+<div class="w-8 h-8 bg-green-600 border border-white/10 rounded-sm cursor-pointer hover:border-white/30"></div>
+<div class="w-8 h-8 bg-lime-800 border border-white/10 rounded-sm cursor-pointer hover:border-white/30"></div>
+<button class="w-8 h-8 flex items-center justify-center border border-dashed border-zinc-700 rounded-sm hover:bg-zinc-800 transition-colors">
+<span class="material-symbols-outlined text-zinc-600 text-[14px]">add</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Tile Properties -->
+<div class="p-4 flex-1 overflow-y-auto">
+<span class="text-[10px] font-bold text-zinc-400 uppercase tracking-widest block mb-3">Tile Properties</span>
+<div class="space-y-4">
+<div class="flex flex-col gap-1">
+<label class="text-[9px] font-bold text-zinc-500 uppercase">Name</label>
+<input class="bg-surface-container-highest border border-outline-variant/30 text-[11px] text-zinc-300 rounded focus:ring-1 focus:ring-primary w-full h-8 px-2" type="text" value="SciFi_Corridor_A1"/>
+</div>
+<div class="flex flex-col gap-1">
+<label class="text-[9px] font-bold text-zinc-500 uppercase">Size Presets</label>
+<div class="grid grid-cols-4 gap-1">
+<button class="bg-surface-container-highest py-1 text-[10px] rounded text-zinc-400 border border-transparent hover:border-zinc-700">16x16</button>
+<button class="bg-violet-600/20 py-1 text-[10px] rounded text-violet-400 border border-violet-500/50">32x32</button>
+<button class="bg-surface-container-highest py-1 text-[10px] rounded text-zinc-400 border border-transparent hover:border-zinc-700">64x64</button>
+<button class="bg-surface-container-highest py-1 text-[10px] rounded text-zinc-400 border border-transparent hover:border-zinc-700">Custom</button>
+</div>
+</div>
+<!-- Edge Types -->
+<div class="flex flex-col gap-2">
+<label class="text-[9px] font-bold text-zinc-500 uppercase">Edge Types</label>
+<div class="grid grid-cols-2 gap-2">
+<div class="flex flex-col gap-1">
+<span class="text-[8px] text-zinc-600 font-bold uppercase">North</span>
+<div class="relative">
+<select class="bg-surface-container-highest border border-outline-variant/30 text-[10px] text-zinc-300 rounded w-full h-7 px-1 appearance-none">
+<option>Solid Wall</option>
+<option>Open Ground</option>
+<option>Transition</option>
+</select>
+<span class="material-symbols-outlined absolute right-1 top-1.5 text-zinc-500 text-[10px] pointer-events-none">expand_more</span>
+</div>
+</div>
+<div class="flex flex-col gap-1">
+<span class="text-[8px] text-zinc-600 font-bold uppercase">South</span>
+<div class="relative">
+<select class="bg-surface-container-highest border border-outline-variant/30 text-[10px] text-zinc-300 rounded w-full h-7 px-1 appearance-none">
+<option>Solid Wall</option>
+<option>Open Ground</option>
+<option>Transition</option>
+</select>
+<span class="material-symbols-outlined absolute right-1 top-1.5 text-zinc-500 text-[10px] pointer-events-none">expand_more</span>
+</div>
+</div>
+<div class="flex flex-col gap-1">
+<span class="text-[8px] text-zinc-600 font-bold uppercase">East</span>
+<div class="relative">
+<select class="bg-surface-container-highest border border-outline-variant/30 text-[10px] text-zinc-300 rounded w-full h-7 px-1 appearance-none">
+<option>Open Ground</option>
+<option>Solid Wall</option>
+<option>Transition</option>
+</select>
+<span class="material-symbols-outlined absolute right-1 top-1.5 text-zinc-500 text-[10px] pointer-events-none">expand_more</span>
+</div>
+</div>
+<div class="flex flex-col gap-1">
+<span class="text-[8px] text-zinc-600 font-bold uppercase">West</span>
+<div class="relative">
+<select class="bg-surface-container-highest border border-outline-variant/30 text-[10px] text-zinc-300 rounded w-full h-7 px-1 appearance-none">
+<option>Open Ground</option>
+<option>Solid Wall</option>
+<option>Transition</option>
+</select>
+<span class="material-symbols-outlined absolute right-1 top-1.5 text-zinc-500 text-[10px] pointer-events-none">expand_more</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</aside>
+</main>
+<!-- Secondary Toolbar Row (Moved to Bottom Above Footer) -->
+<div class="fixed bottom-6 w-full h-8 bg-surface-container-low border-t border-outline-variant flex items-center z-40">
+<div class="flex items-center h-full px-4 space-x-6">
+<div class="flex items-center space-x-2 border-r border-outline-variant pr-6 h-full">
+<span class="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Controls</span>
+</div>
+<div class="flex items-center space-x-6">
+<div class="flex items-center space-x-2">
+<span class="text-[10px] font-bold text-zinc-500 uppercase">Y-Slice</span>
+<input class="w-24 h-1 bg-zinc-700 accent-primary appearance-none rounded-full cursor-pointer" type="range" value="1"/>
+<span class="text-[10px] font-mono text-primary">1px</span>
+</div>
+<div class="flex items-center space-x-2">
+<span class="text-[10px] font-bold text-zinc-500 uppercase">Opacity</span>
+<input class="w-24 h-1 bg-zinc-700 accent-primary appearance-none rounded-full cursor-pointer" type="range" value="100"/>
+<span class="text-[10px] font-mono text-primary">100%</span>
+</div>
+<div class="h-4 w-[1px] bg-outline-variant"></div>
+<div class="flex items-center space-x-1">
+<button class="w-6 h-6 flex items-center justify-center rounded border border-zinc-700 bg-zinc-800/50 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors">
+<span class="material-symbols-outlined text-sm">videocam</span>
+</button>
+<button class="w-6 h-6 flex items-center justify-center rounded border border-zinc-700 bg-zinc-800/50 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors">
+<span class="material-symbols-outlined text-sm">grid_view</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Footer -->
+<footer class="fixed bottom-0 w-full flex justify-between items-center px-3 z-50 bg-zinc-900 dark:bg-zinc-950 border-t border-zinc-800 h-6 flat">
+<div class="font-mono text-[10px] text-zinc-500">VOXL v1.0.4 | Ready | Selection: 0 voxels</div>
+<div class="flex gap-4">
+<span class="font-mono text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors">Memory: 1.2GB</span>
+<span class="font-mono text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors">Tris: 42k</span>
+<span class="font-mono text-[10px] text-violet-400 hover:text-zinc-300 transition-colors">XYZ: 0, 0, 0</span>
+<span class="font-mono text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors">Grid: 128x128</span>
+</div>
+</footer>
+</body></html>

@@ -39,8 +39,8 @@ public:
 	static constexpr uint8_t MAT_LAVA    = 6;
 	static constexpr uint8_t MAT_ACID    = 7;
 	static constexpr uint8_t MAT_GAS     = 8;
-	static constexpr uint8_t NOT_LOADED  = 0x7F;
-	static constexpr uint8_t NO_REACTION = 0xFF;
+	static constexpr uint16_t NOT_LOADED  = 0x7F7F;
+	static constexpr uint16_t NO_REACTION = 0xFFFF;
 
 	static constexpr int APPLY_CHANGES_CAP = 2048;
 	static constexpr int NUM_WORKERS = 8;
@@ -68,14 +68,22 @@ protected:
 	static void _bind_methods();
 
 private:
-	// ── Material helpers ──
+	// ── Material helpers (operate on base material = low byte) ──
 
-	static inline bool is_fluid(uint8_t id) {
-		return id == MAT_WATER || id == MAT_LAVA || id == MAT_ACID;
+	static inline uint8_t base_material(uint16_t id) { return id & 0xFF; }
+	static inline uint8_t visual_variant(uint16_t id) { return (id >> 8) & 0xFF; }
+	static inline uint16_t make_voxel_id(uint8_t base, uint8_t visual) {
+		return (static_cast<uint16_t>(visual) << 8) | base;
 	}
-	static inline bool is_gas(uint8_t id) { return id == MAT_GAS; }
-	static inline bool is_solid(uint8_t id) {
-		return id != MAT_AIR && !is_fluid(id) && !is_gas(id);
+
+	static inline bool is_fluid(uint16_t id) {
+		uint8_t b = base_material(id);
+		return b == MAT_WATER || b == MAT_LAVA || b == MAT_ACID;
+	}
+	static inline bool is_gas(uint16_t id) { return base_material(id) == MAT_GAS; }
+	static inline bool is_solid(uint16_t id) {
+		uint8_t b = base_material(id);
+		return b != MAT_AIR && !is_fluid(id) && !is_gas(id);
 	}
 
 	// ── World-to-voxel coordinate conversion ──
@@ -99,10 +107,10 @@ private:
 	// ── SimChunk ──
 
 	struct SimChunk {
-		uint8_t buf_a[CHUNK_VOL];
-		uint8_t buf_b[CHUNK_VOL];
-		uint8_t *current = buf_a;
-		uint8_t *next_buf = buf_b;
+		uint16_t buf_a[CHUNK_VOL];
+		uint16_t buf_b[CHUNK_VOL];
+		uint16_t *current = buf_a;
+		uint16_t *next_buf = buf_b;
 		int wcx = 0, wcz = 0;
 		enum State : uint8_t { UNLOADED, LOADING, LOADED } state = UNLOADED;
 	};
@@ -142,7 +150,7 @@ private:
 	struct ChunkLoadResult {
 		SimChunk *chunk;
 		int wcx, wcz;
-		uint8_t data[CHUNK_VOL];
+		uint16_t data[CHUNK_VOL];
 	};
 
 	std::vector<std::thread> _loader_threads;
@@ -176,7 +184,7 @@ private:
 
 	// ── Buffer writes ──
 
-	void _write_cell(const Vector3i &world_pos, uint8_t val);
+	void _write_cell(const Vector3i &world_pos, uint16_t val);
 
 	// ── Tick ──
 
@@ -191,7 +199,7 @@ private:
 
 	// ── Simulation (wx/wz = world coords, wy = local Y 0..CHUNK_Y-1) ──
 
-	inline uint8_t _read_raw(int wx, int wy, int wz) const {
+	inline uint16_t _read_raw(int wx, int wy, int wz) const {
 		if (wy < 0 || wy >= CHUNK_Y) return MAT_BEDROCK;
 		SimChunk *c = _chunk_at(_chunk_coord(wx), _chunk_coord(wz));
 		if (!c) return MAT_BEDROCK;
@@ -200,7 +208,7 @@ private:
 		return c->current[lx + wy * CHUNK_X + lz * CHUNK_X * CHUNK_Y];
 	}
 
-	inline void _write_next(int wx, int wy, int wz, uint8_t val) {
+	inline void _write_next(int wx, int wy, int wz, uint16_t val) {
 		if (wy < 0 || wy >= CHUNK_Y) return;
 		SimChunk *c = _chunk_at(_chunk_coord(wx), _chunk_coord(wz));
 		if (!c || c->state != SimChunk::LOADED) return;
@@ -208,7 +216,7 @@ private:
 		c->next_buf[lx + wy * CHUNK_X + lz * CHUNK_X * CHUNK_Y] = val;
 	}
 
-	inline void _write_next_if_unchanged(int wx, int wy, int wz, uint8_t val) {
+	inline void _write_next_if_unchanged(int wx, int wy, int wz, uint16_t val) {
 		if (wy < 0 || wy >= CHUNK_Y) return;
 		SimChunk *c = _chunk_at(_chunk_coord(wx), _chunk_coord(wz));
 		if (!c || c->state != SimChunk::LOADED) return;
@@ -218,9 +226,9 @@ private:
 		c->next_buf[idx] = val;
 	}
 
-	uint8_t _react(int wx, int wy, int wz, uint8_t my_id);
-	void _sim_fluid(int wx, int wy, int wz, uint8_t id);
-	void _sim_gas(int wx, int wy, int wz, uint8_t id);
+	uint16_t _react(int wx, int wy, int wz, uint16_t my_id);
+	void _sim_fluid(int wx, int wy, int wz, uint16_t id);
+	void _sim_gas(int wx, int wy, int wz, uint16_t id);
 	void _sim_cell(int wx, int wy, int wz);
 
 	// ── Utilities ──
