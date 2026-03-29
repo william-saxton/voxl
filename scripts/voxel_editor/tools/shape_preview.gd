@@ -70,6 +70,7 @@ func _ready() -> void:
 	add_child(_fill_instance)
 
 
+
 func set_preview_color(mode: int) -> void:
 	# 0 = ADD, 1 = SUBTRACT, 2 = PAINT
 	var col: Color

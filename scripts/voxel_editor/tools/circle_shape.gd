@@ -102,6 +102,11 @@ func _add_octants(cx: int, cy: int, x: int, y: int, fixed: int,
 			out.append(_make_pos(pt.x, pt.y, fixed))
 
 
+func get_guide_markers() -> Dictionary:
+	var center := Vector3(_center) + Vector3(0.5, 0.5, 0.5)
+	return { "center": center }
+
+
 func _make_pos(u_val: int, v_val: int, fixed_val: int) -> Vector3i:
 	var pos := Vector3i.ZERO
 	pos[_plane_u] = u_val

@@ -2,11 +2,11 @@
 
 [ext_resource type="Script" uid="uid://bk7mk74i1hy12" path="res://scripts/voxel_editor/voxel_editor_main.gd" id="1"]
 [ext_resource type="Script" uid="uid://dnxjk651l41v7" path="res://scripts/voxel_editor/editor_camera.gd" id="2"]
-[ext_resource type="Theme" uid="uid://cs3ou2klnmlgp" path="res://themes/voxl_editor_theme.tres" id="2_75ljf"]
 [ext_resource type="Script" uid="uid://c8sfyuhxogo1y" path="res://scripts/voxel_editor/tile_renderer.gd" id="3"]
 [ext_resource type="Script" uid="uid://bi5lhekresb70" path="res://scripts/voxel_editor/editor_grid.gd" id="4"]
 [ext_resource type="Script" uid="uid://cc8e7ssyffwfj" path="res://scripts/voxel_editor/hover_highlight.gd" id="6"]
 [ext_resource type="Texture2D" uid="uid://can4i3uo408bb" path="res://themes/icons/scale.svg" id="15_a1lhh"]
+[ext_resource type="Theme" uid="uid://cs3ou2klnmlgp" path="res://themes/voxl_editor_theme.tres" id="21_7s7we"]
 [ext_resource type="Texture2D" uid="uid://b4i3hhokcc6sg" path="res://themes/icons/add_box.svg" id="ico_add_box"]
 [ext_resource type="Texture2D" uid="uid://bekq0um615h2f" path="res://themes/icons/brush.svg" id="ico_brush"]
 [ext_resource type="Texture2D" uid="uid://ywsrqdh23glj" path="res://themes/icons/category.svg" id="ico_category"]
@@ -57,7 +57,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme = ExtResource("2_75ljf")
+theme = ExtResource("21_7s7we")
 script = ExtResource("1")
 
 [node name="MainVBox" type="VBoxContainer" parent="." unique_id=209943931]
@@ -612,4 +612,4 @@ unique_name_in_owner = true
 oversampling_override = 1.0
 position = Vector2i(0, 36)
 size = Vector2i(400, 500)
-theme = ExtResource("2_75ljf")
+theme = ExtResource("21_7s7we")

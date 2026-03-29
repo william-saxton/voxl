@@ -154,6 +154,14 @@ func _apply_3d_hollow(positions: Array[Vector3i]) -> Array[Vector3i]:
 	return filtered
 
 
+## Returns guide markers for the current shape. Override in subclasses.
+## Returns Dictionary with optional keys:
+##   "center": Vector3 — center point (rendered as circle)
+##   "edge_midpoints": Array[Vector3] — edge midpoints (rendered as X marks)
+func get_guide_markers() -> Dictionary:
+	return {}
+
+
 # --- Virtual methods for subclasses ---
 
 func _on_begin(_pos: Vector3i) -> void:

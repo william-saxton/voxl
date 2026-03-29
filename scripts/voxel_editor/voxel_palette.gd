@@ -69,7 +69,7 @@ static func _default_color(base: int) -> Color:
 		MaterialRegistry.MUD: return Color(0.18, 0.12, 0.08)
 		MaterialRegistry.LAVA: return Color(1.0, 0.3, 0.0, 0.9)
 		MaterialRegistry.ACID: return Color(0.3, 0.9, 0.1, 0.6)
-		MaterialRegistry.GAS: return Color(0.5, 0.7, 0.3, 0.3)
+		MaterialRegistry.STEAM: return Color(0.5, 0.7, 0.3, 0.3)
 	return Color.MAGENTA
 
 
@@ -130,7 +130,7 @@ func resolve_material_color(voxel_id: int) -> Color:
 		MaterialRegistry.MUD: return Color(0.3, 0.2, 0.1)
 		MaterialRegistry.LAVA: return Color(1.0, 0.3, 0.0)
 		MaterialRegistry.ACID: return Color(0.3, 0.9, 0.1)
-		MaterialRegistry.GAS: return Color(0.5, 0.7, 0.3)
+		MaterialRegistry.STEAM: return Color(0.5, 0.7, 0.3)
 	# Unknown — use golden ratio hash for a unique hue
 	var h := fmod(float(base) * 0.618033988749895, 1.0)
 	return Color.from_hsv(h, 0.7, 0.9)

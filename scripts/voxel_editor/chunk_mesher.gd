@@ -234,7 +234,7 @@ static func _greedy_face(tile: WFCTileDef, palette: VoxelPalette,
 				var group := _get_group(groups, mat)
 
 				_emit_quad(group.verts, group.colors, group.normals,
-					ox, oy, oz, axis, dir, u_axis, v_axis,
+					axis, dir, u_axis, v_axis,
 					d, u, v, w, h, normal, color)
 
 				# Clear mask
@@ -247,7 +247,6 @@ static func _greedy_face(tile: WFCTileDef, palette: VoxelPalette,
 
 static func _emit_quad(verts: PackedVector3Array, colors: PackedColorArray,
 		normals: PackedVector3Array,
-		_ox: int, _oy: int, _oz: int,
 		axis: int, dir: int, u_axis: int, v_axis: int,
 		d: int, u: int, v: int, w: int, h: int,
 		normal: Vector3, color: Color) -> void:

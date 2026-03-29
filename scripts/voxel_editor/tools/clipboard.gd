@@ -40,13 +40,14 @@ func copy(tile: WFCTileDef, selection: VoxelSelection) -> void:
 ## Paste clipboard contents at the given anchor position.
 ## Returns a dictionary of { positions: Array[Vector3i], voxel_ids: Dictionary }
 ## for the undo system to apply.
-func get_paste_data(anchor: Vector3i) -> Dictionary:
+func get_paste_data(anchor: Vector3i, tile: WFCTileDef = null) -> Dictionary:
 	var positions: Array[Vector3i] = []
 	var voxel_ids: Dictionary = {}  # Vector3i → int
 
 	for rel_pos in _data:
 		var world_pos: Vector3i = (rel_pos as Vector3i) + anchor
-		if VoxelQuery._in_bounds(world_pos):
+		var in_bounds := VoxelQuery._in_bounds_tile(world_pos, tile) if tile else VoxelQuery._in_bounds(world_pos)
+		if in_bounds:
 			positions.append(world_pos)
 			voxel_ids[world_pos] = _data[rel_pos]
 
@@ -54,10 +55,11 @@ func get_paste_data(anchor: Vector3i) -> Dictionary:
 
 
 ## Get preview positions for paste at the given anchor (for rendering).
-func get_paste_preview(anchor: Vector3i) -> Array[Vector3i]:
+func get_paste_preview(anchor: Vector3i, tile: WFCTileDef = null) -> Array[Vector3i]:
 	var result: Array[Vector3i] = []
 	for rel_pos in _data:
 		var world_pos: Vector3i = (rel_pos as Vector3i) + anchor
-		if VoxelQuery._in_bounds(world_pos):
+		var in_bounds := VoxelQuery._in_bounds_tile(world_pos, tile) if tile else VoxelQuery._in_bounds(world_pos)
+		if in_bounds:
 			result.append(world_pos)
 	return result

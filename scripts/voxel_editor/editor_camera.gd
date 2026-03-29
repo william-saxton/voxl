@@ -76,6 +76,15 @@ func focus_on(pos: Vector3) -> void:
 	_update_transform()
 
 
+## Snap to a Rift Delver-style isometric view (30° pitch, 45° yaw, perspective).
+func set_isometric(target: Vector3, dist: float) -> void:
+	_target = target
+	_yaw = -PI / 4.0       # 45° — classic isometric corner view
+	_pitch = PI / 6.0       # 30° — Rift Delver's top-down-ish angle
+	_distance = dist
+	_update_transform()
+
+
 func _update_transform() -> void:
 	var offset := Vector3(
 		cos(_pitch) * sin(_yaw),

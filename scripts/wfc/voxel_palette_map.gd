@@ -30,6 +30,6 @@ static func create_default() -> VoxelPaletteMap:
 		5: MaterialRegistry.MUD,
 		6: MaterialRegistry.LAVA,
 		7: MaterialRegistry.ACID,
-		8: MaterialRegistry.GAS,
+		8: MaterialRegistry.STEAM,
 	}
 	return pal

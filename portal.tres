@@ -1,0 +1,17 @@
+[gd_resource type="ShaderMaterial" format=3 uid="uid://co4ujn1xbi7hl"]
+
+[ext_resource type="Shader" uid="uid://cuqgjto2tc1qr" path="res://shaders/rift_portal.gdshader" id="1_yfpgl"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_yfpgl")
+shader_parameter/void_color = Color(0, 0, 0, 1)
+shader_parameter/star_color_dim = Color(0.4, 0.3, 0.7, 1)
+shader_parameter/star_color_bright = Color(0.9, 0.7, 1, 1)
+shader_parameter/edge_color = Color(0.6, 0.2, 0.9, 1)
+shader_parameter/edge_glow_intensity = 2.930000115425
+shader_parameter/star_density = 140.77600621186
+shader_parameter/star_twinkle_speed = 3.0200001197
+shader_parameter/scroll_speed = 0.426000020235
+shader_parameter/nebula_intensity = 0.12400000589
+shader_parameter/distortion_strength = 0.11200000532

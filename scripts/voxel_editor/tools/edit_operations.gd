@@ -40,7 +40,7 @@ static func rotate(tile: WFCTileDef, selection: VoxelSelection,
 			int(floorf(rotated.x + center.x)),
 			int(floorf(rotated.y + center.y)),
 			int(floorf(rotated.z + center.z)))
-		if VoxelQuery._in_bounds(new_pos):
+		if VoxelQuery._in_bounds_tile(new_pos, tile):
 			new_positions.append(new_pos)
 			new_data[new_pos] = src_voxels[pos]
 
@@ -92,7 +92,7 @@ static func rotate_degrees(tile: WFCTileDef, selection: VoxelSelection,
 			int(floorf(rotated.x + center.x)),
 			int(floorf(rotated.y + center.y)),
 			int(floorf(rotated.z + center.z)))
-		if VoxelQuery._in_bounds(new_pos):
+		if VoxelQuery._in_bounds_tile(new_pos, tile):
 			new_positions.append(new_pos)
 			new_data[new_pos] = src_voxels[pos]
 
@@ -128,7 +128,7 @@ static func flip(tile: WFCTileDef, selection: VoxelSelection,
 	for pos in positions:
 		var new_pos := pos
 		new_pos[axis] = max_p[axis] - (pos[axis] - min_p[axis])
-		if VoxelQuery._in_bounds(new_pos):
+		if VoxelQuery._in_bounds_tile(new_pos, tile):
 			new_positions.append(new_pos)
 			new_data[new_pos] = src_voxels[pos]
 
@@ -164,7 +164,7 @@ static func mirror(tile: WFCTileDef, selection: VoxelSelection,
 			continue
 		var mirror_pos := pos
 		mirror_pos[axis] = pivot + (max_p[axis] - pos[axis])
-		if VoxelQuery._in_bounds(mirror_pos):
+		if VoxelQuery._in_bounds_tile(mirror_pos, tile):
 			old_data[mirror_pos] = tile.get_voxel(mirror_pos.x, mirror_pos.y, mirror_pos.z)
 			new_data[mirror_pos] = vid
 
@@ -188,7 +188,7 @@ static func hollow(tile: WFCTileDef, selection: VoxelSelection) -> Dictionary:
 		var all_solid := true
 		for n in VoxelQuery.NEIGHBORS_6:
 			var np := pos + n
-			if not VoxelQuery._in_bounds(np) or tile.get_voxel(np.x, np.y, np.z) == 0:
+			if not VoxelQuery._in_bounds_tile(np, tile) or tile.get_voxel(np.x, np.y, np.z) == 0:
 				all_solid = false
 				break
 		if all_solid:
@@ -221,7 +221,7 @@ static func flood_interior(tile: WFCTileDef, selection: VoxelSelection,
 						y == min_p.y or y == max_p.y - 1 or \
 						z == min_p.z or z == max_p.z - 1:
 					var pos := Vector3i(x, y, z)
-					if VoxelQuery._in_bounds(pos) and tile.get_voxel(x, y, z) == 0:
+					if VoxelQuery._in_bounds_tile(pos, tile) and tile.get_voxel(x, y, z) == 0:
 						boundary_air[pos] = true
 						visited[pos] = true
 						queue.append(pos)
@@ -238,7 +238,7 @@ static func flood_interior(tile: WFCTileDef, selection: VoxelSelection,
 					np.z < min_p.z or np.z >= max_p.z:
 				continue
 			visited[np] = true
-			if VoxelQuery._in_bounds(np) and tile.get_voxel(np.x, np.y, np.z) == 0:
+			if VoxelQuery._in_bounds_tile(np, tile) and tile.get_voxel(np.x, np.y, np.z) == 0:
 				boundary_air[np] = true
 				queue.append(np)
 
@@ -249,7 +249,7 @@ static func flood_interior(tile: WFCTileDef, selection: VoxelSelection,
 		for y in range(min_p.y, max_p.y):
 			for z in range(min_p.z, max_p.z):
 				var pos := Vector3i(x, y, z)
-				if VoxelQuery._in_bounds(pos) and tile.get_voxel(x, y, z) == 0 \
+				if VoxelQuery._in_bounds_tile(pos, tile) and tile.get_voxel(x, y, z) == 0 \
 						and not boundary_air.has(pos):
 					old_data[pos] = 0
 					new_data[pos] = fill_id
@@ -274,7 +274,7 @@ static func dilate(tile: WFCTileDef, selection: VoxelSelection,
 		for pos in solid:
 			for n in VoxelQuery.NEIGHBORS_6:
 				var np: Vector3i = (pos as Vector3i) + n
-				if not solid.has(np) and VoxelQuery._in_bounds(np) and \
+				if not solid.has(np) and VoxelQuery._in_bounds_tile(np, tile) and \
 						tile.get_voxel(np.x, np.y, np.z) == 0:
 					if not new_data.has(np):
 						old_data[np] = 0
@@ -327,7 +327,7 @@ static func scale(tile: WFCTileDef, selection: VoxelSelection,
 					int(floorf(scaled_min.x)) + dx,
 					int(floorf(scaled_min.y)) + dy,
 					int(floorf(scaled_min.z)) + dz)
-				if not VoxelQuery._in_bounds(dest):
+				if not VoxelQuery._in_bounds_tile(dest, tile):
 					continue
 				# Inverse map to source
 				var src_f := (Vector3(dest) + Vector3(0.5, 0.5, 0.5) - center) / factor + center

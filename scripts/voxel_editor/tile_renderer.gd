@@ -127,6 +127,7 @@ func set_tile(tile: WFCTileDef, palette: VoxelPalette) -> void:
 	_tile = tile
 	_palette = palette
 	_update_chunk_layout()
+	_apply_view_mode()
 	mark_all_dirty()
 
 
@@ -186,24 +187,31 @@ func _rebuild_chunk_nodes() -> void:
 
 ## Apply the current view mode's material to all mesh instances.
 func _apply_view_mode() -> void:
-	var override_mat: Material = null
-	match view_mode:
-		ViewMode.UNSHADED:
-			override_mat = _mat_unshaded
-		ViewMode.LIT:
-			override_mat = _mat_lit
-		ViewMode.NORMALS:
-			override_mat = _mat_normals
-		ViewMode.MATERIAL:
-			override_mat = _mat_unshaded  # Flat colors, but colored by base_material
-		ViewMode.TEXTURED:
-			override_mat = null  # Per-surface materials show through
+	var has_custom := _palette and _palette.has_any_custom_materials()
 
 	for mi in _mesh_instances:
-		mi.material_override = override_mat
-		# In Textured mode, set the default surface material on surfaces without custom mats
-		if view_mode == ViewMode.TEXTURED and mi.mesh:
-			_apply_default_surface_materials(mi.mesh)
+		if has_custom:
+			# Custom shader materials are set per-surface by the mesher.
+			# material_override would stomp them, so leave it null.
+			mi.material_override = null
+			if mi.mesh:
+				_apply_surface_materials(mi.mesh)
+		else:
+			var override_mat: Material = null
+			match view_mode:
+				ViewMode.UNSHADED:
+					override_mat = _mat_unshaded
+				ViewMode.LIT:
+					override_mat = _mat_lit
+				ViewMode.NORMALS:
+					override_mat = _mat_normals
+				ViewMode.MATERIAL:
+					override_mat = _mat_unshaded
+				ViewMode.TEXTURED:
+					override_mat = null
+			mi.material_override = override_mat
+			if view_mode == ViewMode.TEXTURED and mi.mesh:
+				_apply_default_surface_materials(mi.mesh)
 
 
 ## Set the default lit material on mesh surfaces that have no custom material.
@@ -211,6 +219,24 @@ func _apply_default_surface_materials(mesh: ArrayMesh) -> void:
 	for s in mesh.get_surface_count():
 		if mesh.surface_get_material(s) == null:
 			mesh.surface_set_material(s, _mat_default_surface)
+
+
+## Apply per-surface materials: keep custom shader materials, apply the current
+## view mode's base material to surfaces that have none.
+func _apply_surface_materials(mesh: ArrayMesh) -> void:
+	var base_mat: Material
+	match view_mode:
+		ViewMode.UNSHADED, ViewMode.MATERIAL:
+			base_mat = _mat_unshaded
+		ViewMode.LIT:
+			base_mat = _mat_lit
+		ViewMode.NORMALS:
+			base_mat = _mat_normals
+		ViewMode.TEXTURED:
+			base_mat = _mat_default_surface
+	for s in mesh.get_surface_count():
+		if mesh.surface_get_material(s) == null:
+			mesh.surface_set_material(s, base_mat)
 
 
 ## Mark a specific chunk dirty by chunk coordinates.
@@ -254,6 +280,7 @@ func _process(_delta: float) -> void:
 
 func _remesh_dirty() -> void:
 	var use_material_colors := view_mode == ViewMode.MATERIAL
+	var has_custom := _palette and _palette.has_any_custom_materials()
 	var count := 0
 	for i in _total_chunks:
 		if count >= REMESH_PER_FRAME:
@@ -269,18 +296,22 @@ func _remesh_dirty() -> void:
 
 		var chunk_pos := Vector3(cx, cy, cz) * CHUNK_SIZE
 		var mesh: ArrayMesh
-		if _native and not use_material_colors:
+		if has_custom or use_material_colors:
+			# GDScript mesher groups faces by shader_material into separate surfaces
+			mesh = ChunkMesher.build_mesh(_tile, _palette, cx, cy, cz,
+					use_material_colors)
+		elif _native:
 			mesh = _native.build_chunk_mesh(_tile.voxel_data, cx, cy, cz,
 					_palette.get_color_table(),
 					_tile.tile_size_x, _tile.tile_size_y, _tile.tile_size_z)
 		else:
-			mesh = ChunkMesher.build_mesh(_tile, _palette, cx, cy, cz,
-					use_material_colors)
+			mesh = ChunkMesher.build_mesh(_tile, _palette, cx, cy, cz, false)
 		_mesh_instances[i].mesh = mesh
 		_mesh_instances[i].position = chunk_pos
 
-		# In Textured mode, apply default surface materials to surfaces without custom mats
-		if view_mode == ViewMode.TEXTURED and mesh:
+		if mesh and has_custom:
+			_apply_surface_materials(mesh)
+		elif mesh and view_mode == ViewMode.TEXTURED:
 			_apply_default_surface_materials(mesh)
 
 		if show_wireframe:

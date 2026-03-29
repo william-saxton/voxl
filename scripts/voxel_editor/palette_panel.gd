@@ -3,17 +3,22 @@ extends PanelContainer
 
 ## Palette entry list for the voxel editor, grouped by base material.
 ## Supports palette switching via TilePaletteSet.
+## Supports search filtering and multi-select (Ctrl+click) for gradient painting.
 
 signal entry_selected(index: int)
+signal multi_selection_changed(indices: Array[int])
 signal add_entry_requested(base_material: int)
 
 var _palette: VoxelPalette
 var _palette_set: TilePaletteSet
 var _selected_index: int = 1
+var _multi_selected: Array[int] = []  ## All selected indices (includes _selected_index)
 var _scroll: ScrollContainer
 var _list: VBoxContainer
 var _entry_buttons: Array[Button] = []
 var _palette_selector: OptionButton
+var _search_edit: LineEdit
+var _search_text: String = ""
 
 
 func _ready() -> void:
@@ -37,8 +42,16 @@ func _ready() -> void:
 	_palette_selector.item_selected.connect(_on_palette_selector_changed)
 	_palette_selector.visible = false
 
+	# Search bar
+	_search_edit = LineEdit.new()
+	_search_edit.placeholder_text = "Search entries..."
+	_search_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_search_edit.clear_button_enabled = true
+	_search_edit.text_changed.connect(_on_search_changed)
+
 	vbox.add_child(header)
 	vbox.add_child(_palette_selector)
+	vbox.add_child(_search_edit)
 	_scroll.add_child(_list)
 	vbox.add_child(_scroll)
 	add_child(vbox)
@@ -60,11 +73,17 @@ func set_palette_set(ps: TilePaletteSet) -> void:
 
 func select_entry(index: int) -> void:
 	_selected_index = index
+	_multi_selected = [index]
 	_update_selection()
+	multi_selection_changed.emit(_multi_selected.duplicate())
 
 
 func get_selected_index() -> int:
 	return _selected_index
+
+
+func get_multi_selected() -> Array[int]:
+	return _multi_selected.duplicate()
 
 
 func _rebuild_palette_selector() -> void:
@@ -86,11 +105,24 @@ func _on_palette_selector_changed(index: int) -> void:
 	_rebuild_list()
 
 
+func _on_search_changed(text: String) -> void:
+	_search_text = text.strip_edges().to_lower()
+	_rebuild_list()
+
+
 func refresh() -> void:
 	if _palette_set:
 		_palette = _palette_set.get_active()
 		_rebuild_palette_selector()
 	_rebuild_list()
+
+
+func _matches_search(entry_name: String, mat_name: String) -> bool:
+	if _search_text.is_empty():
+		return true
+	var lower_entry := entry_name.to_lower()
+	var lower_mat := mat_name.to_lower()
+	return lower_entry.contains(_search_text) or lower_mat.contains(_search_text)
 
 
 func _rebuild_list() -> void:
@@ -123,6 +155,18 @@ func _rebuild_list() -> void:
 		if base_mat == MaterialRegistry.AIR and indices.size() <= 1:
 			continue
 
+		# Filter entries by search
+		var visible_indices: Array[int] = []
+		for idx: int in indices:
+			var entry: PaletteEntry = _palette.entries[idx]
+			var ename: String = entry.entry_name if entry.entry_name != "" else "Entry %d" % idx
+			if _matches_search(ename, mat_name):
+				visible_indices.append(idx)
+
+		# Skip entire group if no entries match search
+		if visible_indices.is_empty() and not _search_text.is_empty():
+			continue
+
 		# Group header row with material name and "+" button
 		var header_row := HBoxContainer.new()
 		header_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -144,7 +188,14 @@ func _rebuild_list() -> void:
 
 		_list.add_child(header_row)
 
-		for idx in indices:
+		var entries_to_show: Array[int] = []
+		if not _search_text.is_empty():
+			entries_to_show = visible_indices
+		else:
+			for idx: int in indices:
+				entries_to_show.append(idx)
+
+		for idx in entries_to_show:
 			var entry: PaletteEntry = _palette.entries[idx]
 			var btn := Button.new()
 			btn.custom_minimum_size = Vector2(0, 28)
@@ -168,7 +219,11 @@ func _rebuild_list() -> void:
 			btn.add_child(hbox)
 
 			var captured_idx: int = idx
-			btn.pressed.connect(func(): _on_entry_pressed(captured_idx))
+			btn.gui_input.connect(func(event: InputEvent) -> void:
+				if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+					_on_entry_clicked(captured_idx, event.ctrl_pressed)
+					btn.accept_event()
+			)
 			btn.tooltip_text = "%s (ID: %d, base: %s)" % [
 				entry.entry_name, idx, mat_name]
 
@@ -181,14 +236,40 @@ func _rebuild_list() -> void:
 	_update_selection()
 
 
+func _on_entry_clicked(index: int, ctrl_held: bool) -> void:
+	if ctrl_held:
+		# Toggle multi-select
+		if index in _multi_selected:
+			_multi_selected.erase(index)
+			# If we removed the primary, pick another
+			if index == _selected_index and not _multi_selected.is_empty():
+				_selected_index = _multi_selected[0]
+		else:
+			_multi_selected.append(index)
+		# Always keep at least one selected
+		if _multi_selected.is_empty():
+			_multi_selected = [index]
+			_selected_index = index
+		multi_selection_changed.emit(_multi_selected.duplicate())
+	else:
+		# Normal click — single select
+		_selected_index = index
+		_multi_selected = [index]
+		multi_selection_changed.emit(_multi_selected.duplicate())
+	_update_selection()
+	entry_selected.emit(_selected_index)
+
+
 func _on_entry_pressed(index: int) -> void:
 	_selected_index = index
+	_multi_selected = [index]
 	_update_selection()
 	entry_selected.emit(index)
+	multi_selection_changed.emit(_multi_selected.duplicate())
 
 
 func _update_selection() -> void:
 	for i in _entry_buttons.size():
 		var btn := _entry_buttons[i]
 		if btn and is_instance_valid(btn):
-			btn.flat = (i != _selected_index)
+			btn.flat = i not in _multi_selected

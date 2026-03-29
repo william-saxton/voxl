@@ -36,6 +36,7 @@ var _export_dialog: TileExportDialog
 # ── Right panel components ──
 var _palette_panel: PalettePanel
 var _palette_editor: PaletteEditorPanel
+var _gradient_panel: PanelContainer  ## GradientSelectionPanel
 var _settings_dialog: AcceptDialog
 var _right_vbox: VBoxContainer
 var _custom_planes_list: ItemList
@@ -77,6 +78,16 @@ var _btn_col: Button
 var _select_brush_size_label: Label
 var _select_brush_size_spin: SpinBox
 
+# ── Snap controls ──
+var _snap_option: OptionButton
+var _snap_mode_option: OptionButton
+
+# ── Procedural shader controls ──
+var _proc_sep: VSeparator
+var _proc_label: Label
+var _proc_preset_option: OptionButton
+var _proc_edit_btn: Button
+
 # ── Bottom bar ──
 var _status_label: Label
 var _stats_label: Label
@@ -85,6 +96,9 @@ var _y_slice_label: Label
 
 # ── State ──
 var _ui_scale: float = 1.0
+
+# ── Procedural shader dialog ──
+var _shader_dialog: AcceptDialog  # ShaderEditorDialog
 
 # ── File dialogs ──
 var _open_dialog: FileDialog
@@ -111,6 +125,7 @@ func _ready() -> void:
 	_setup_left_sidebar()
 	_setup_transform_bar()
 	_setup_right_panel()
+	_tool_manager.gradient_panel = _gradient_panel
 	_setup_bottom_bar()
 	_setup_tile_properties()
 	_setup_metadata()
@@ -254,6 +269,8 @@ func _setup_menu() -> void:
 	edit_menu.name = "Edit"
 	edit_menu.add_item("Undo", 0, KEY_MASK_CTRL | KEY_Z)
 	edit_menu.add_item("Redo", 1, KEY_MASK_CTRL | KEY_MASK_SHIFT | KEY_Z)
+	edit_menu.add_separator()
+	edit_menu.add_item("Procedural Shader...", 10)
 	edit_menu.id_pressed.connect(_on_edit_menu)
 	menu_bar.add_child(edit_menu)
 
@@ -262,6 +279,7 @@ func _setup_menu() -> void:
 	view_menu.name = "Viewport"
 	view_menu.add_item("Reset Camera", 0)
 	view_menu.add_item("Focus Center", 1)
+	view_menu.add_item("Rift Delver View", 3)
 	view_menu.add_separator()
 	view_menu.add_check_item("Wireframe (W)", 2)
 	view_menu.set_item_checked(view_menu.get_item_index(2), true)
@@ -271,6 +289,10 @@ func _setup_menu() -> void:
 	view_menu.add_item("Normals", 22)
 	view_menu.add_item("Material", 23)
 	view_menu.add_item("Textured", 24)
+	view_menu.add_separator()
+	view_menu.add_check_item("Player Reference", 30)
+	view_menu.set_item_checked(view_menu.get_item_index(30), true)
+	view_menu.add_item("Player Ref Size...", 31)
 	view_menu.add_separator()
 	view_menu.add_item("UI Scale: 75%", 10)
 	view_menu.add_item("UI Scale: 100%", 11)
@@ -333,6 +355,8 @@ func _setup_tools() -> void:
 	_tool_manager.selection_changed.connect(_on_selection_changed)
 	_tool_manager.select_settings_changed.connect(_on_select_settings_changed)
 	_tool_manager.symmetry_changed.connect(_on_symmetry_changed)
+	_tool_manager.numeric_input_changed.connect(_on_numeric_input_changed)
+	_tool_manager.procedural_preset_changed.connect(_on_procedural_preset_synced)
 
 	_viewport_container.gui_input.connect(_on_viewport_gui_input)
 
@@ -383,6 +407,61 @@ func _setup_context_bar() -> void:
 
 	# Select brush size signal
 	_select_brush_size_spin.value_changed.connect(_on_select_brush_size_changed)
+
+	# Snap controls (added programmatically)
+	var snap_sep := VSeparator.new()
+	_context_hbox.add_child(snap_sep)
+
+	var snap_lbl := Label.new()
+	snap_lbl.text = "Snap:"
+	_context_hbox.add_child(snap_lbl)
+
+	_snap_option = OptionButton.new()
+	_snap_option.add_item("Off", 0)
+	_snap_option.add_item("2", 2)
+	_snap_option.add_item("4", 4)
+	_snap_option.add_item("8", 8)
+	_snap_option.add_item("16", 16)
+	_snap_option.item_selected.connect(_on_snap_grid_changed)
+	_context_hbox.add_child(_snap_option)
+
+	_snap_mode_option = OptionButton.new()
+	_snap_mode_option.add_item("Edge", 0)
+	_snap_mode_option.add_item("Center", 1)
+	_snap_mode_option.item_selected.connect(_on_snap_mode_changed)
+	_snap_mode_option.visible = false
+	_context_hbox.add_child(_snap_mode_option)
+
+	# Procedural shader controls
+	_proc_sep = VSeparator.new()
+	_proc_sep.visible = false
+	_context_hbox.add_child(_proc_sep)
+
+	_proc_label = Label.new()
+	_proc_label.text = "Shader:"
+	_proc_label.visible = false
+	_context_hbox.add_child(_proc_label)
+
+	_proc_preset_option = OptionButton.new()
+	_proc_preset_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_proc_preset_option.custom_minimum_size.x = 120
+	_proc_preset_option.add_item("(custom)")
+	for preset_name in ProceduralTool.PRESETS:
+		_proc_preset_option.add_item(preset_name)
+	_proc_preset_option.item_selected.connect(_on_proc_preset_selected)
+	_proc_preset_option.visible = false
+	_context_hbox.add_child(_proc_preset_option)
+	# Default to first preset (Sphere)
+	if ProceduralTool.PRESETS.size() > 0:
+		var first_name: String = ProceduralTool.PRESETS.keys()[0]
+		_tool_manager.set_procedural_preset(first_name)
+		_proc_preset_option.select(1)  # Index 1 = first preset (0 = custom)
+
+	_proc_edit_btn = Button.new()
+	_proc_edit_btn.text = "Edit..."
+	_proc_edit_btn.pressed.connect(_open_shader_dialog)
+	_proc_edit_btn.visible = false
+	_context_hbox.add_child(_proc_edit_btn)
 
 	_update_context_bar_visibility()
 
@@ -536,6 +615,16 @@ func _update_sub_tools() -> void:
 		_sub_tools_vbox.add_child(btn_extrude)
 		_sub_tool_buttons.append(btn_extrude)
 
+		_sub_tools_vbox.add_child(HSeparator.new())
+
+		# Procedural shader tool
+		var btn_proc := _make_sub_tool_button("Shader", "P", "shader")
+		btn_proc.pressed.connect(func():
+			_tool_manager.current_mode = EditorToolManager.PrimaryMode.ADD
+			_tool_manager.current_tool_type = EditorToolManager.ToolType.PROCEDURAL)
+		_sub_tools_vbox.add_child(btn_proc)
+		_sub_tool_buttons.append(btn_proc)
+
 	_update_context_bar_visibility()
 
 
@@ -670,7 +759,14 @@ func _setup_right_panel() -> void:
 	_palette_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_palette_panel.entry_selected.connect(_on_palette_entry_selected)
 	_palette_panel.add_entry_requested.connect(_on_palette_add_entry_for_material)
+	_palette_panel.multi_selection_changed.connect(_on_palette_multi_selection_changed)
 	_right_vbox.add_child(_palette_panel)
+
+	_right_vbox.add_child(HSeparator.new())
+
+	# Gradient selection panel (multi-select weights)
+	_gradient_panel = load("res://scripts/voxel_editor/palette/gradient_selection_panel.gd").new()
+	_right_vbox.add_child(_gradient_panel)
 
 	_right_vbox.add_child(HSeparator.new())
 
@@ -805,6 +901,13 @@ func _update_context_bar_visibility() -> void:
 	_select_brush_size_label.visible = is_brush_select
 	_select_brush_size_spin.visible = is_brush_select
 
+	# Procedural shader controls
+	var is_proc := tt == EditorToolManager.ToolType.PROCEDURAL
+	_proc_sep.visible = is_proc
+	_proc_label.visible = is_proc
+	_proc_preset_option.visible = is_proc
+	_proc_edit_btn.visible = is_proc
+
 	# Context label text
 	match tt:
 		EditorToolManager.ToolType.SHAPE:
@@ -819,6 +922,8 @@ func _update_context_bar_visibility() -> void:
 			_context_label.text = "TRANSFORM:"
 		EditorToolManager.ToolType.METADATA:
 			_context_label.text = "SPAWNS:"
+		EditorToolManager.ToolType.PROCEDURAL:
+			_context_label.text = "SHADER:"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -864,6 +969,7 @@ func _on_edit_menu(id: int) -> void:
 	match id:
 		0: _tool_manager.undo_manager.undo(_tile, _tile_renderer)
 		1: _tool_manager.undo_manager.redo(_tile, _tile_renderer)
+		10: _open_shader_dialog()
 
 
 func _on_selection_menu(id: int) -> void:
@@ -910,6 +1016,16 @@ func _on_view_menu(id: int) -> void:
 			var view_menu: PopupMenu = %MenuBar.get_child(2)
 			view_menu.set_item_checked(
 				view_menu.get_item_index(2), _tile_renderer.show_wireframe)
+		3:
+			# Rift Delver View — isometric camera + lit shading
+			var center := Vector3(64.0, 16.0, 64.0)
+			if _tile:
+				center = Vector3(_tile.tile_size_x / 2.0, _tile.tile_size_y / 4.0, _tile.tile_size_z / 2.0)
+			_camera_pivot.set_isometric(center, 120.0)
+			_set_view_mode(TileRenderer.ViewMode.LIT)
+			_tile_renderer.show_wireframe = false
+			var vm2: PopupMenu = %MenuBar.get_child(2)
+			vm2.set_item_checked(vm2.get_item_index(2), false)
 		10: set_ui_scale(0.75)
 		11: set_ui_scale(1.0)
 		12: set_ui_scale(1.25)
@@ -920,6 +1036,120 @@ func _on_view_menu(id: int) -> void:
 		22: _set_view_mode(TileRenderer.ViewMode.NORMALS)
 		23: _set_view_mode(TileRenderer.ViewMode.MATERIAL)
 		24: _set_view_mode(TileRenderer.ViewMode.TEXTURED)
+		30:
+			var vis := not _editor_grid._ref_visible
+			_editor_grid.set_ref_visible(vis)
+			var vm: PopupMenu = %MenuBar.get_child(2)
+			vm.set_item_checked(vm.get_item_index(30), vis)
+		31:
+			_show_ref_size_dialog()
+
+
+func _show_ref_size_dialog() -> void:
+	var dialog := AcceptDialog.new()
+	dialog.title = "Player Reference Size"
+	dialog.min_size = Vector2i(250, 0)
+
+	var vbox := VBoxContainer.new()
+
+	var h_row := HBoxContainer.new()
+	var h_lbl := Label.new()
+	h_lbl.text = "Height:"
+	h_lbl.custom_minimum_size.x = 60
+	h_row.add_child(h_lbl)
+	var h_spin := SpinBox.new()
+	h_spin.min_value = 1.0
+	h_spin.max_value = 20.0
+	h_spin.step = 0.5
+	h_spin.value = _editor_grid._ref_height
+	h_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	h_row.add_child(h_spin)
+	vbox.add_child(h_row)
+
+	var r_row := HBoxContainer.new()
+	var r_lbl := Label.new()
+	r_lbl.text = "Radius:"
+	r_lbl.custom_minimum_size.x = 60
+	r_row.add_child(r_lbl)
+	var r_spin := SpinBox.new()
+	r_spin.min_value = 0.25
+	r_spin.max_value = 5.0
+	r_spin.step = 0.25
+	r_spin.value = _editor_grid._ref_radius
+	r_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	r_row.add_child(r_spin)
+	vbox.add_child(r_row)
+
+	dialog.add_child(vbox)
+	dialog.confirmed.connect(func():
+		_editor_grid.set_ref_size(h_spin.value, r_spin.value)
+		dialog.queue_free()
+	)
+	dialog.canceled.connect(func(): dialog.queue_free())
+	add_child(dialog)
+	dialog.popup_centered()
+
+
+func _open_shader_dialog() -> void:
+	if not _tile:
+		_update_status("No tile open")
+		return
+
+	if not _shader_dialog:
+		var DialogClass := load("res://scripts/voxel_editor/ui/shader_editor_dialog.gd")
+		_shader_dialog = DialogClass.new()
+		_shader_dialog.apply_requested.connect(_on_shader_apply)
+		add_child(_shader_dialog)
+
+	_shader_dialog.set_tile_size(_tile.get_tile_size())
+
+	# Pre-populate with the current procedural code
+	if not _tool_manager.procedural_code.is_empty():
+		_shader_dialog._code_edit.text = _tool_manager.procedural_code
+
+	# If there's a selection, use its bounding box as the region
+	if not _tool_manager.selection.is_empty():
+		var bb := _tool_manager.selection.get_bounding_box()
+		_shader_dialog.set_region(Vector3i(bb.position), Vector3i(bb.size))
+
+	_shader_dialog.clear_error()
+	_shader_dialog.popup_centered(Vector2i(550, 580))
+
+
+func _on_shader_apply(code: String, origin: Vector3i, region_size: Vector3i, vid_override: int) -> void:
+	if not _tile or not _palette:
+		return
+
+	# Push edited code back to tool manager for click-drag workflow
+	_tool_manager.set_procedural_code(code)
+
+	# Get the voxel ID from the current palette entry
+	var vid: int = _palette.get_voxel_id(_tool_manager.selected_palette_index)
+	var is_preview := vid_override == -99
+
+	var result: Variant = ProceduralTool.execute(_tile, origin, region_size, vid, code)
+
+	if result is String:
+		# Error message
+		if _shader_dialog:
+			_shader_dialog.show_error(result)
+		return
+
+	var changes: Dictionary = result
+	if changes.is_empty():
+		if _shader_dialog:
+			_shader_dialog.show_error("No voxels changed")
+		return
+
+	# Apply through undo system
+	var action := _tool_manager.undo_manager.create_action(
+		"Procedural: %d voxels" % changes.size())
+	for pos: Vector3i in changes:
+		var old_id := _tile.get_voxel(pos.x, pos.y, pos.z)
+		_tool_manager.undo_manager.add_voxel_change(action, pos, old_id, changes[pos])
+	_tool_manager.undo_manager.apply_and_commit(action, _tile, _tile_renderer)
+
+	_update_status("Procedural: %d voxels %s" % [changes.size(), "previewed" if is_preview else "applied"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -943,11 +1173,15 @@ func _on_mode_changed(_mode: EditorToolManager.PrimaryMode) -> void:
 
 
 func _on_shape_changed(_shape_type: EditorToolManager.ShapeType) -> void:
-	# Update sub-tool button selection
-	if _sub_tool_buttons.size() > _shape_type:
-		for i in _sub_tool_buttons.size():
-			if _sub_tool_buttons[i].toggle_mode:
-				_sub_tool_buttons[i].set_pressed_no_signal(i == _shape_type)
+	# Only update sub-tool button selection when in a shape-based tool mode
+	var tt := _tool_manager.current_tool_type
+	if tt == EditorToolManager.ToolType.SHAPE or \
+			tt == EditorToolManager.ToolType.FILL or \
+			tt == EditorToolManager.ToolType.EXTRUDE:
+		if _sub_tool_buttons.size() > _shape_type:
+			for i in _sub_tool_buttons.size():
+				if _sub_tool_buttons[i].toggle_mode:
+					_sub_tool_buttons[i].set_pressed_no_signal(i == _shape_type)
 	_update_context_bar_visibility()
 
 
@@ -955,6 +1189,26 @@ func _on_tool_type_changed(_tool_type: EditorToolManager.ToolType) -> void:
 	_sync_main_tool_buttons()
 	_update_context_bar_visibility()
 	_update_sub_tools()
+
+
+func _on_snap_grid_changed(option_index: int) -> void:
+	var grid := _snap_option.get_item_id(option_index)
+	_tool_manager.snap_grid = grid
+	if grid == 0:
+		_tool_manager.snap_mode = EditorToolManager.SnapMode.OFF
+		_snap_mode_option.visible = false
+		_editor_grid.set_snap(0, false)
+	else:
+		var center := _snap_mode_option.selected == 1
+		_tool_manager.snap_mode = EditorToolManager.SnapMode.EDGE if not center else EditorToolManager.SnapMode.CENTER
+		_snap_mode_option.visible = true
+		_editor_grid.set_snap(grid, center)
+
+
+func _on_snap_mode_changed(option_index: int) -> void:
+	var center := option_index == 1
+	_tool_manager.snap_mode = EditorToolManager.SnapMode.EDGE if not center else EditorToolManager.SnapMode.CENTER
+	_editor_grid.set_snap(_tool_manager.snap_grid, center)
 
 
 func _on_brush_size_changed(value: float) -> void:
@@ -989,16 +1243,19 @@ func _on_face_toggled(pressed: bool) -> void:
 	else:
 		q.connectivity = VoxelQuery.Connectivity.GEOMETRY
 	_tool_manager.fill_tool.query.connectivity = q.connectivity
+	_tool_manager.extrude_tool.query.connectivity = q.connectivity
 
 
 func _on_color_toggled(pressed: bool) -> void:
 	_tool_manager.select_tool.query.filter_color = pressed
 	_tool_manager.fill_tool.query.filter_color = pressed
+	_tool_manager.extrude_tool.query.filter_color = pressed
 
 
 func _on_material_toggled(pressed: bool) -> void:
 	_tool_manager.select_tool.query.filter_material = pressed
 	_tool_manager.fill_tool.query.filter_material = pressed
+	_tool_manager.extrude_tool.query.filter_material = pressed
 
 
 
@@ -1040,6 +1297,10 @@ func _on_select_criteria_changed(criteria: String) -> void:
 	fq.filter_color = sq.filter_color
 	fq.filter_material = sq.filter_material
 	fq.connectivity = sq.connectivity
+	var eq := _tool_manager.extrude_tool.query
+	eq.filter_color = sq.filter_color
+	eq.filter_material = sq.filter_material
+	eq.connectivity = sq.connectivity
 
 
 func _on_select_brush_size_changed(value: float) -> void:
@@ -1058,6 +1319,26 @@ func _on_props_range_changed(range_val: int) -> void:
 
 func _on_props_wrap_changed(enabled: bool) -> void:
 	_tool_manager.transform_tool.wrap = enabled
+
+
+func _on_proc_preset_selected(index: int) -> void:
+	if index == 0:
+		return  # "(custom)" — keep existing code
+	var preset_name: String = _proc_preset_option.get_item_text(index)
+	_tool_manager.set_procedural_preset(preset_name)
+
+
+func _on_procedural_preset_synced(preset_name: String) -> void:
+	if not _proc_preset_option:
+		return
+	# Sync the dropdown to match the tool manager's preset
+	if preset_name == "(custom)":
+		_proc_preset_option.select(0)
+		return
+	for i in _proc_preset_option.item_count:
+		if _proc_preset_option.get_item_text(i) == preset_name:
+			_proc_preset_option.select(i)
+			return
 
 
 func _on_y_slice_changed(value: float) -> void:
@@ -1140,6 +1421,7 @@ func _on_palette_switched(_index: int) -> void:
 	_tile_renderer.set_tile(_tile, _palette)
 	_palette_panel.refresh()
 	_palette_editor.set_selected_entry(_palette_panel.get_selected_index())
+	_gradient_panel.set_palette(_palette)
 	_update_status("Switched to palette: %s" % _palette.palette_name)
 
 
@@ -1173,6 +1455,10 @@ func _on_palette_entry_selected(index: int) -> void:
 	_palette_editor.set_selected_entry(index)
 
 
+func _on_palette_multi_selection_changed(indices: Array[int]) -> void:
+	_gradient_panel.update_selection(indices)
+
+
 func _on_import_palette(path: String) -> void:
 	var loaded := ResourceLoader.load(path)
 	if loaded is VoxelPalette:
@@ -1182,6 +1468,7 @@ func _on_import_palette(path: String) -> void:
 		_tile_renderer.set_tile(_tile, _palette)
 		_palette_panel.refresh()
 		_palette_editor.set_palette_set(_palette_set)
+		_gradient_panel.set_palette(_palette)
 		_update_status("Imported palette: %s" % path.get_file())
 	else:
 		_update_status("ERROR: Failed to load palette from %s" % path)
@@ -1375,6 +1662,7 @@ func new_tile() -> void:
 	_tile_renderer.set_tile(_tile, _palette)
 	_palette_panel.set_palette_set(_palette_set)
 	_palette_editor.set_palette_set(_palette_set)
+	_gradient_panel.set_palette(_palette)
 	_tool_manager.undo_manager.clear()
 	_sync_tile_properties()
 	_tool_manager.refresh_metadata_markers()
@@ -1394,12 +1682,16 @@ func open_tile(path: String) -> void:
 				entry.entry_name = entry_data.get("name", "")
 				entry.color = entry_data.get("color", Color.WHITE)
 				entry.base_material = entry_data.get("base_material", MaterialRegistry.STONE)
+				var sm: Variant = entry_data.get("shader_material")
+				if sm is Material:
+					entry.shader_material = sm
 				pal.entries.append(entry)
 			_palette_set = TilePaletteSet.new()
 			_palette_set.palettes[0] = pal
 			_palette = _palette_set.get_active()
 			_palette_panel.set_palette_set(_palette_set)
 			_palette_editor.set_palette_set(_palette_set)
+		_gradient_panel.set_palette(_palette)
 		_tile_renderer.set_tile(_tile, _palette)
 		_tool_manager.undo_manager.clear()
 		_sync_tile_properties()
@@ -1433,11 +1725,14 @@ func _do_save(path: String) -> void:
 	if _palette:
 		var entries_data: Array[Dictionary] = []
 		for entry in _palette.entries:
-			entries_data.append({
+			var d := {
 				"name": entry.entry_name,
 				"color": entry.color,
 				"base_material": entry.base_material,
-			})
+			}
+			if entry.shader_material:
+				d["shader_material"] = entry.shader_material
+			entries_data.append(d)
 		_tile.palette_entries = entries_data
 	var err := ResourceSaver.save(_tile, path)
 	if err == OK:
@@ -1501,6 +1796,13 @@ func set_ui_scale(scale_factor: float) -> void:
 
 func get_ui_scale() -> float:
 	return _ui_scale
+
+
+func _on_numeric_input_changed(text: String) -> void:
+	if text.is_empty():
+		_update_status("Ready")
+	else:
+		_update_status("Size: %s  (Tab=next axis, Enter=commit, Esc=cancel)" % text)
 
 
 func _update_status(text: String) -> void:

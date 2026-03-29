@@ -7,7 +7,7 @@ extends Node
 
 enum PrimaryMode { ADD, SUBTRACT, PAINT }
 enum ShapeType { BRUSH, LINE, BOX, CIRCLE, POLYGON }
-enum ToolType { SHAPE, FILL, EXTRUDE, SELECT, TRANSFORM, METADATA }
+enum ToolType { SHAPE, FILL, EXTRUDE, SELECT, TRANSFORM, METADATA, PROCEDURAL }
 
 signal mode_changed(mode: PrimaryMode)
 signal shape_changed(shape_type: ShapeType)
@@ -22,6 +22,7 @@ var current_mode: PrimaryMode = PrimaryMode.ADD:
 	set(value):
 		_cancel_shape()
 		current_mode = value
+		_update_highlight_color()
 		mode_changed.emit(value)
 
 var current_shape_type: ShapeType = ShapeType.BRUSH:
@@ -39,12 +40,25 @@ var current_tool_type: ToolType = ToolType.SHAPE:
 			if _transform_gizmo:
 				_transform_gizmo.clear_rotate_feedback()
 		current_tool_type = value
+		# Procedural tool always uses box shape and ADD mode for region definition
+		if value == ToolType.PROCEDURAL:
+			current_shape_type = ShapeType.BOX
+			current_mode = PrimaryMode.ADD
 		_update_gizmo()
 		tool_type_changed.emit(value)
 
 var selected_palette_index: int = 1
+var gradient_panel: PanelContainer  ## GradientSelectionPanel, set by VoxelEditorMain
 var current_shape: ShapeTool = BrushShape.new()
 var undo_manager := VoxelUndoManager.new()
+
+## Snap grid: 0 = off, 2/4/8/16 = snap interval.
+## "center" mode snaps to grid centers (odd positions), "edge" snaps to grid boundaries (even).
+enum SnapMode { OFF, EDGE, CENTER }
+var snap_grid: int = 0
+var snap_mode: SnapMode = SnapMode.OFF
+
+signal snap_changed()
 
 ## Fill, Extrude, and Transform tools
 var fill_tool := FillTool.new()
@@ -65,6 +79,11 @@ var _metadata_renderer: MetadataRenderer
 var _paste_mode := false  ## True when floating paste preview is active
 var _mirror_place_mode := false  ## True when placing a custom mirror plane
 var _select_ref_id: int = -1  ## Voxel ID at first click for criteria filtering
+
+## Procedural shader tool
+var procedural_code: String = ""
+var procedural_preset: String = ""
+signal procedural_preset_changed(preset_name: String)
 
 ## Hollow toggle for box/circle/polygon shapes
 var hollow := false
@@ -93,6 +112,19 @@ var _shape_preview: ShapePreview
 var _work_plane_point := Vector3.ZERO
 var _work_plane_normal := Vector3.ZERO
 
+## Surface guide markers — shows center and edge midpoints of hovered face region
+var _guide_hover_pos := Vector3i(-999, -999, -999)
+var _guide_hover_normal := Vector3i.ZERO
+var _surface_query: VoxelQuery
+var _surface_guide: MeshInstance3D  # SurfaceGuideRenderer
+
+## Numeric input for shape dimensions
+var _numeric_input: String = ""       ## Current typed number buffer
+var _numeric_axis: int = 0            ## 0 = first axis (width), 1 = second axis (depth)
+var _numeric_active := false          ## True when numeric entry is in progress
+var _numeric_locked: Array[String] = ["", ""]  ## Locked values for display
+signal numeric_input_changed(text: String)
+
 
 func initialize(editor_main: VoxelEditorMain, viewport: SubViewport,
 		camera: Camera3D, highlight: HoverHighlight,
@@ -107,6 +139,14 @@ func initialize(editor_main: VoxelEditorMain, viewport: SubViewport,
 	_shape_preview = ShapePreview.new()
 	_shape_preview.name = "ShapePreview"
 	viewport.add_child(_shape_preview)
+
+	# Surface guide markers (center + edge midpoints of hovered face region)
+	_surface_query = VoxelQuery.new()
+	_surface_query.connectivity = VoxelQuery.Connectivity.FACE
+	_surface_query.search_range = 64
+	_surface_guide = load("res://scripts/voxel_editor/tools/surface_guide_renderer.gd").new()
+	_surface_guide.name = "SurfaceGuide"
+	viewport.add_child(_surface_guide)
 
 	# Create selection renderer
 	_selection_renderer = SelectionRenderer.new()
@@ -138,6 +178,12 @@ func initialize(editor_main: VoxelEditorMain, viewport: SubViewport,
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		var key := event as InputEventKey
+
+		# Numeric input for shape dimensions — intercept before other shortcuts
+		if current_shape.active and _handle_numeric_key(key):
+			get_viewport().set_input_as_handled()
+			return
+
 		match key.keycode:
 			# Mode shortcuts
 			KEY_B:
@@ -181,9 +227,15 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_T:
 				current_tool_type = ToolType.TRANSFORM if current_tool_type != ToolType.TRANSFORM else ToolType.SHAPE
 				get_viewport().set_input_as_handled()
-			# View mode cycle
+			KEY_P:
+				current_tool_type = ToolType.PROCEDURAL if current_tool_type != ToolType.PROCEDURAL else ToolType.SHAPE
+				get_viewport().set_input_as_handled()
+			# View mode cycle / Paste
 			KEY_V:
-				_editor_main._cycle_view_mode()
+				if key.ctrl_pressed:
+					begin_paste()
+				else:
+					_editor_main._cycle_view_mode()
 				get_viewport().set_input_as_handled()
 			# Wireframe toggle
 			KEY_W:
@@ -208,10 +260,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_X:
 				if key.ctrl_pressed:
 					cut_selection()
-					get_viewport().set_input_as_handled()
-			KEY_V:
-				if key.ctrl_pressed:
-					begin_paste()
 					get_viewport().set_input_as_handled()
 			# Selection shortcuts
 			KEY_A:
@@ -321,6 +369,7 @@ func _update_hover() -> void:
 			_highlight.visible = false
 		if _shape_preview:
 			_shape_preview.clear()
+		_clear_surface_guides()
 		return
 
 	var mouse_pos := _container_to_viewport(container_mouse)
@@ -382,7 +431,8 @@ func _update_hover() -> void:
 	if current_shape.active:
 		if current_shape.in_height_phase():
 			# Height phase: track mouse movement along screen-space face_normal
-			_update_height_from_mouse()
+			if not _numeric_active:
+				_update_height_from_mouse()
 			if _shape_preview:
 				_shape_preview.set_preview_color(current_mode)
 				_update_shape_preview()
@@ -390,6 +440,9 @@ func _update_hover() -> void:
 			# Shape definition phase: project onto the face plane
 			if _project_onto_plane(ray_origin, ray_dir):
 				current_shape.update(_plane_hit_pos)
+				# Re-apply numeric constraint after mouse update
+				if _numeric_active:
+					_apply_numeric_to_shape()
 				if _shape_preview:
 					_shape_preview.set_preview_color(current_mode)
 					_update_shape_preview()
@@ -438,6 +491,7 @@ func _update_hover() -> void:
 				face_normal = result.previous - result.position
 
 			_update_highlight_color()
+			_update_surface_guides(tile, hover_pos, face_normal)
 
 			# Brush with size > 1: show full sphere/circle preview
 			var is_brush := current_shape_type == ShapeType.BRUSH and brush_size > 1
@@ -470,10 +524,12 @@ func _update_hover() -> void:
 					_shape_preview.clear()
 		else:
 			_highlight.visible = false
+			_clear_surface_guides()
 			if _shape_preview:
 				_shape_preview.clear()
 	elif _shape_preview:
 		_shape_preview.clear()
+		_clear_surface_guides()
 
 
 func handle_viewport_click(event: InputEventMouseButton) -> void:
@@ -559,23 +615,35 @@ func handle_viewport_click(event: InputEventMouseButton) -> void:
 
 		# If shape is active, this is the next click — commit or advance phase
 		if current_shape.active:
+			# Apply numeric constraint before committing
+			if _numeric_active and not _numeric_input.is_empty():
+				_apply_numeric_to_shape()
+
 			# Update with final position using appropriate projection
-			if current_shape.in_height_phase():
-				_update_height_from_mouse()
-			else:
-				if _project_onto_plane(ray_origin, ray_dir):
-					current_shape.update(_plane_hit_pos)
+			if not _numeric_active:
+				if current_shape.in_height_phase():
+					_update_height_from_mouse()
+				else:
+					if _project_onto_plane(ray_origin, ray_dir):
+						current_shape.update(_plane_hit_pos)
 
 			var positions := current_shape.commit()
 
 			if current_shape.active:
 				# Shape transitioned to height phase — capture mouse start position
+				_numeric_axis = 0
+				_numeric_input = ""
 				_setup_height_tracking()
+				_emit_numeric_status()
 				if _shape_preview:
 					_shape_preview.set_preview_color(current_mode)
 					_update_shape_preview()
 			elif not positions.is_empty():
-				_apply_mode_to_positions(positions, tile, palette)
+				if current_tool_type == ToolType.PROCEDURAL and current_shape is BoxShape:
+					_apply_procedural(tile, current_shape as BoxShape)
+				else:
+					_apply_mode_to_positions(positions, tile, palette)
+				_reset_numeric()
 				if _shape_preview:
 					_shape_preview.clear()
 			else:
@@ -610,6 +678,7 @@ func handle_viewport_click(event: InputEventMouseButton) -> void:
 				target_pos = result.position
 				face_normal = result.previous - result.position
 
+		target_pos = snap_position(target_pos)
 		if not _in_bounds(target_pos):
 			return
 
@@ -668,6 +737,12 @@ func handle_viewport_click(event: InputEventMouseButton) -> void:
 			_apply_subtract_single(tile, rm_result.position)
 
 
+func _pick_voxel_id(palette: VoxelPalette) -> int:
+	if gradient_panel and gradient_panel.visible:
+		return palette.get_voxel_id(gradient_panel.pick_random_index())
+	return palette.get_voxel_id(selected_palette_index)
+
+
 func _apply_mode_to_positions(positions: Array[Vector3i], tile: WFCTileDef,
 		palette: VoxelPalette) -> void:
 	if positions.is_empty():
@@ -676,7 +751,8 @@ func _apply_mode_to_positions(positions: Array[Vector3i], tile: WFCTileDef,
 	# Expand positions through symmetry
 	var all_positions: Array[Vector3i] = _expand_with_symmetry(positions)
 
-	var voxel_id := palette.get_voxel_id(selected_palette_index)
+	var use_gradient := gradient_panel and gradient_panel.visible
+	var voxel_id := _pick_voxel_id(palette) if not use_gradient else 0
 	var action := undo_manager.create_action(_mode_action_name())
 	var renderer := _editor_main.get_tile_renderer()
 
@@ -684,6 +760,8 @@ func _apply_mode_to_positions(positions: Array[Vector3i], tile: WFCTileDef,
 		if not _in_bounds(pos):
 			continue
 		var old_id := tile.get_voxel(pos.x, pos.y, pos.z)
+		if use_gradient:
+			voxel_id = _pick_voxel_id(palette)
 		match current_mode:
 			PrimaryMode.ADD:
 				undo_manager.add_voxel_change(action, pos, old_id, voxel_id)
@@ -703,13 +781,16 @@ func _brush_apply_positions(positions: Array[Vector3i], tile: WFCTileDef,
 	if positions.is_empty():
 		return
 	var all_positions: Array[Vector3i] = _expand_with_symmetry(positions)
-	var voxel_id := palette.get_voxel_id(selected_palette_index)
+	var use_gradient := gradient_panel and gradient_panel.visible
+	var voxel_id := _pick_voxel_id(palette) if not use_gradient else 0
 	var renderer := _editor_main.get_tile_renderer()
 
 	for pos in all_positions:
 		if not _in_bounds(pos):
 			continue
 		var old_id := tile.get_voxel(pos.x, pos.y, pos.z)
+		if use_gradient:
+			voxel_id = _pick_voxel_id(palette)
 		var new_id := old_id
 		match current_mode:
 			PrimaryMode.ADD:
@@ -751,7 +832,8 @@ func _handle_fill_click(tile: WFCTileDef, palette: VoxelPalette,
 		return
 
 	var positions: Array[Vector3i] = _expand_with_symmetry(raw_positions)
-	var voxel_id := palette.get_voxel_id(selected_palette_index)
+	var use_gradient := gradient_panel and gradient_panel.visible
+	var voxel_id := _pick_voxel_id(palette) if not use_gradient else 0
 	var action := undo_manager.create_action("Fill")
 	var renderer := _editor_main.get_tile_renderer()
 
@@ -759,6 +841,8 @@ func _handle_fill_click(tile: WFCTileDef, palette: VoxelPalette,
 		if not _in_bounds(pos):
 			continue
 		var old_id := tile.get_voxel(pos.x, pos.y, pos.z)
+		if use_gradient:
+			voxel_id = _pick_voxel_id(palette)
 		match current_mode:
 			PrimaryMode.ADD:
 				undo_manager.add_voxel_change(action, pos, old_id, voxel_id)
@@ -801,7 +885,8 @@ func _handle_extrude_release(tile: WFCTileDef, palette: VoxelPalette) -> void:
 		sym_targets.append(t as Vector3i)
 	sym_targets = _expand_with_symmetry(sym_targets)
 
-	var voxel_id := palette.get_voxel_id(selected_palette_index)
+	var use_gradient := gradient_panel and gradient_panel.visible
+	var voxel_id := _pick_voxel_id(palette) if not use_gradient else 0
 	var action := undo_manager.create_action("Extrude %d layers" % layer_count)
 	var renderer := _editor_main.get_tile_renderer()
 
@@ -810,6 +895,8 @@ func _handle_extrude_release(tile: WFCTileDef, palette: VoxelPalette) -> void:
 		if not _in_bounds(pos):
 			continue
 		var old_id := tile.get_voxel(pos.x, pos.y, pos.z)
+		if use_gradient:
+			voxel_id = _pick_voxel_id(palette)
 		match current_mode:
 			PrimaryMode.ADD:
 				var src_id: int = ext_result.voxel_ids.get(pos, voxel_id)
@@ -852,6 +939,7 @@ func _mode_action_name() -> String:
 func _cancel_shape() -> void:
 	if current_shape.active:
 		current_shape.cancel()
+	_reset_numeric()
 	if _shape_preview:
 		_shape_preview.clear()
 
@@ -897,7 +985,6 @@ func _update_shape_preview() -> void:
 		if current_shape.in_height_phase():
 			var h: int = current_shape._height
 			var offset := current_shape.face_normal * h
-			# Expand AABB to include the extruded end
 			var ext_min := Vector3i(
 				mini(min_p.x, min_p.x + offset.x),
 				mini(min_p.y, min_p.y + offset.y),
@@ -908,10 +995,428 @@ func _update_shape_preview() -> void:
 				maxi(max_p.z, max_p.z + offset.z))
 			min_p = ext_min
 			max_p = ext_max
+
+		# Procedural mode: run shader and show actual shape
+		if current_tool_type == ToolType.PROCEDURAL and not procedural_code.is_empty():
+			_run_procedural_preview(min_p, max_p)
+			return
+
 		_shape_preview.update_box_wireframe(min_p, max_p)
 	else:
 		var preview: Array[Vector3i] = current_shape.get_preview()
 		_shape_preview.update_positions(_expand_with_symmetry(preview))
+
+
+
+## Update surface guide markers at the hovered voxel position.
+## Flood-fills the connected coplanar face to find bounds, then shows
+## a circle at center and X marks at edge midpoints.
+func _update_surface_guides(tile: WFCTileDef, hover_pos: Vector3i, face_normal: Vector3i) -> void:
+	if not _shape_preview:
+		return
+
+	# Skip if hovering same position/face as last frame
+	if hover_pos == _guide_hover_pos and face_normal == _guide_hover_normal:
+		return
+	_guide_hover_pos = hover_pos
+	_guide_hover_normal = face_normal
+
+	# The voxel that owns the face is the solid one (hover_pos in SUBTRACT, or hover_pos - face for ADD)
+	var solid_pos: Vector3i
+	if current_mode == PrimaryMode.ADD:
+		solid_pos = hover_pos - face_normal
+	else:
+		solid_pos = hover_pos
+
+	# Verify it's actually solid
+	if tile.get_voxel(solid_pos.x, solid_pos.y, solid_pos.z) == 0:
+		_surface_guide.clear_guides()
+		return
+
+	# Find connected surface voxels sharing this exposed face
+	var surface := _surface_query.find_surface(tile, solid_pos, face_normal)
+	if surface.size() < 2:
+		_surface_guide.clear_guides()
+		return
+
+	# Compute bounding box on the face plane
+	var min_v := Vector3(surface[0])
+	var max_v := Vector3(surface[0])
+	for pos in surface:
+		min_v.x = minf(min_v.x, pos.x)
+		min_v.y = minf(min_v.y, pos.y)
+		min_v.z = minf(min_v.z, pos.z)
+		max_v.x = maxf(max_v.x, pos.x)
+		max_v.y = maxf(max_v.y, pos.y)
+		max_v.z = maxf(max_v.z, pos.z)
+
+	# Offset to voxel centers, then push slightly above the face
+	var face_offset := Vector3(face_normal) * 0.52
+	var center := (min_v + max_v) * 0.5 + Vector3(0.5, 0.5, 0.5) + face_offset
+
+	# Corner positions (in voxel-center space + face offset)
+	var a := min_v + Vector3(0.5, 0.5, 0.5) + face_offset
+	var b := max_v + Vector3(0.5, 0.5, 0.5) + face_offset
+
+	# Determine which axes are on the face plane (not the normal axis)
+	var edge_mids: Array[Vector3] = []
+	var axes: Array[int] = []
+	for ax in 3:
+		if face_normal[ax] == 0 and a[ax] != b[ax]:
+			axes.append(ax)
+
+	if axes.size() == 2:
+		# 2D face — 4 edge midpoints
+		var u: int = axes[0]
+		var v: int = axes[1]
+		# Edge along u at min v
+		var e0 := Vector3(center); e0[v] = a[v]; edge_mids.append(e0)
+		# Edge along u at max v
+		var e1 := Vector3(center); e1[v] = b[v]; edge_mids.append(e1)
+		# Edge along v at min u
+		var e2 := Vector3(center); e2[u] = a[u]; edge_mids.append(e2)
+		# Edge along v at max u
+		var e3 := Vector3(center); e3[u] = b[u]; edge_mids.append(e3)
+	elif axes.size() == 1:
+		# 1D strip — 2 endpoints
+		var u: int = axes[0]
+		var e0 := Vector3(center); e0[u] = a[u]; edge_mids.append(e0)
+		var e1 := Vector3(center); e1[u] = b[u]; edge_mids.append(e1)
+
+	# Remove midpoints that overlap with center
+	var unique_mids: Array[Vector3] = []
+	for m in edge_mids:
+		if not m.is_equal_approx(center):
+			unique_mids.append(m)
+
+	var markers := { "center": center, "edge_midpoints": unique_mids }
+	_surface_guide.update_guides(markers)
+
+
+func _clear_surface_guides() -> void:
+	_guide_hover_pos = Vector3i(-999, -999, -999)
+	_guide_hover_normal = Vector3i.ZERO
+	if _surface_guide:
+		_surface_guide.clear_guides()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Numeric Input for Shape Dimensions
+# ══════════════════════════════════════════════════════════════════════════════
+
+## Get the two drawing-plane axes from the face normal.
+func _get_plane_axes(face_n: Vector3i) -> Array[int]:
+	var dominant := 1
+	if absi(face_n.x) >= absi(face_n.y) and absi(face_n.x) >= absi(face_n.z):
+		dominant = 0
+	elif absi(face_n.z) > absi(face_n.y):
+		dominant = 2
+	match dominant:
+		0: return [2, 1]  # X normal → ZY plane
+		1: return [0, 2]  # Y normal → XZ plane
+		_: return [0, 1]  # Z normal → XY plane
+
+
+## Handle numeric key input during shape drawing. Returns true if consumed.
+func _handle_numeric_key(key: InputEventKey) -> bool:
+	var kc := key.keycode
+
+	# Digit keys (main row and numpad)
+	var digit := -1
+	if kc >= KEY_0 and kc <= KEY_9:
+		digit = kc - KEY_0
+	elif kc >= KEY_KP_0 and kc <= KEY_KP_9:
+		digit = kc - KEY_KP_0
+
+	if digit >= 0:
+		# Don't allow leading zeros (but allow "10", "20", etc.)
+		if _numeric_input.is_empty() and digit == 0:
+			return false
+		_numeric_input += str(digit)
+		_numeric_active = true
+		_apply_numeric_to_shape()
+		_emit_numeric_status()
+		return true
+
+	if not _numeric_active:
+		# Only intercept Tab/Enter/Backspace when numeric entry is active
+		if kc == KEY_TAB:
+			return false
+		return false
+
+	match kc:
+		KEY_BACKSPACE:
+			if not _numeric_input.is_empty():
+				_numeric_input = _numeric_input.substr(0, _numeric_input.length() - 1)
+				_apply_numeric_to_shape()
+				_emit_numeric_status()
+			if _numeric_input.is_empty() and _numeric_axis == 0:
+				_numeric_active = false
+				_emit_numeric_status()
+			return true
+
+		KEY_TAB:
+			# Lock current axis value and advance to next
+			if current_shape.in_height_phase():
+				return false  # No tab during height — Enter commits
+			if _numeric_axis < 1:
+				_numeric_locked[_numeric_axis] = _numeric_input
+				_numeric_axis += 1
+				_numeric_input = ""
+				_emit_numeric_status()
+			else:
+				# Both axes set — commit the 2D shape (enters height phase if supported)
+				_commit_numeric_shape()
+			return true
+
+		KEY_ENTER, KEY_KP_ENTER:
+			_commit_numeric_shape()
+			return true
+
+		KEY_ESCAPE:
+			_reset_numeric()
+			return true
+
+	return false
+
+
+## Apply the currently typed number to the shape's end position.
+func _apply_numeric_to_shape() -> void:
+	if not current_shape.active or _numeric_input.is_empty():
+		return
+
+	var size := _numeric_input.to_int()
+	if size <= 0:
+		return
+
+	# Height phase — set height directly
+	if current_shape.in_height_phase():
+		# Direction: use the face normal direction (positive extrusion)
+		current_shape.set_height(size)
+		if _shape_preview:
+			_shape_preview.set_preview_color(current_mode)
+			_update_shape_preview()
+		return
+
+	var plane_axes := _get_plane_axes(current_shape.face_normal)
+	var pu: int = plane_axes[0]
+	var pv: int = plane_axes[1]
+
+	# Phase 1 — constrain the shape's end position
+	if not (current_shape is BoxShape):
+		# For circle: set radius
+		if current_shape is CircleShape:
+			var circle: CircleShape = current_shape as CircleShape
+			circle._radius_pos = circle._center
+			circle._radius_pos[pu] = circle._center[pu] + size
+			if _shape_preview:
+				_shape_preview.set_preview_color(current_mode)
+				_update_shape_preview()
+		return
+
+	var box: BoxShape = current_shape as BoxShape
+
+	# Determine direction from mouse position relative to start
+	var dir_u := 1
+	var dir_v := 1
+	if box._end[pu] < box._start[pu]:
+		dir_u = -1
+	if box._end[pv] < box._start[pv]:
+		dir_v = -1
+
+	var new_end := Vector3i(box._end)
+
+	if _numeric_axis == 0:
+		# Constrain first axis
+		new_end[pu] = box._start[pu] + dir_u * (size - 1)
+	elif _numeric_axis == 1:
+		# Constrain second axis
+		new_end[pv] = box._start[pv] + dir_v * (size - 1)
+
+	box._end = new_end
+	if _shape_preview:
+		_shape_preview.set_preview_color(current_mode)
+		_update_shape_preview()
+
+
+## Commit the current shape with numeric constraints.
+func _commit_numeric_shape() -> void:
+	if not current_shape.active:
+		_reset_numeric()
+		return
+
+	if current_shape.in_height_phase():
+		# Apply final height if typed
+		if not _numeric_input.is_empty():
+			current_shape.set_height(_numeric_input.to_int())
+
+	var tile := _editor_main.get_tile()
+	var palette := _editor_main.get_palette()
+	var positions := current_shape.commit()
+
+	if current_shape.active:
+		# Shape transitioned to height phase
+		_numeric_axis = 0
+		_numeric_input = ""
+		_setup_height_tracking()
+		_emit_numeric_status()
+		if _shape_preview:
+			_shape_preview.set_preview_color(current_mode)
+			_update_shape_preview()
+	elif not positions.is_empty():
+		_apply_mode_to_positions(positions, tile, palette)
+		_reset_numeric()
+		if _shape_preview:
+			_shape_preview.clear()
+	else:
+		_reset_numeric()
+		if _shape_preview:
+			_shape_preview.clear()
+
+
+func _reset_numeric() -> void:
+	_numeric_input = ""
+	_numeric_axis = 0
+	_numeric_active = false
+	_numeric_locked = ["", ""]
+	_emit_numeric_status()
+
+
+func _emit_numeric_status() -> void:
+	if not _numeric_active:
+		numeric_input_changed.emit("")
+		return
+
+	var axes := _get_plane_axes(current_shape.face_normal)
+	var axis_names := ["X", "Y", "Z"]
+	var u_name: String = axis_names[axes[0]]
+	var v_name: String = axis_names[axes[1]]
+
+	var text := ""
+	var cur := _numeric_input if not _numeric_input.is_empty() else "_"
+	if current_shape.in_height_phase():
+		var prefix := ""
+		if not _numeric_locked[0].is_empty():
+			prefix = "%s: %s" % [u_name, _numeric_locked[0]]
+			if not _numeric_locked[1].is_empty():
+				prefix += "  %s: %s" % [v_name, _numeric_locked[1]]
+			prefix += "  "
+		text = "%sHeight: %s" % [prefix, cur]
+	elif current_shape is CircleShape:
+		text = "Radius: %s" % cur
+	else:
+		if _numeric_axis == 0:
+			text = "%s: %s" % [u_name, cur]
+		else:
+			text = "%s: %s  %s: %s" % [u_name, _numeric_locked[0], v_name, cur]
+	numeric_input_changed.emit(text)
+
+
+## Set the active procedural shader from a preset name.
+func set_procedural_preset(preset_name: String) -> void:
+	procedural_preset = preset_name
+	if ProceduralTool.PRESETS.has(preset_name):
+		procedural_code = ProceduralTool.PRESETS[preset_name]["code"]
+	procedural_preset_changed.emit(preset_name)
+
+
+## Set custom procedural shader code.
+func set_procedural_code(code: String) -> void:
+	procedural_code = code
+	procedural_preset = "(custom)"
+	procedural_preset_changed.emit(procedural_preset)
+
+
+## Run the procedural shader and display the result as the shape preview.
+func _run_procedural_preview(min_p: Vector3i, max_p: Vector3i) -> void:
+	var tile := _editor_main.get_tile()
+	if not tile:
+		_shape_preview.update_box_wireframe(min_p, max_p)
+		return
+
+	var region_size := max_p - min_p + Vector3i.ONE
+
+	# Cap preview volume to avoid stalls
+	var vol: int = region_size.x * region_size.y * region_size.z
+	if vol > 200000:
+		_shape_preview.update_box_wireframe(min_p, max_p)
+		return
+
+	var palette := _editor_main.get_palette()
+	var vid: int = 1
+	if palette:
+		vid = palette.get_voxel_id(selected_palette_index)
+
+	var result: Variant = ProceduralTool.execute(tile, min_p, region_size, vid, procedural_code)
+
+	if result is String or result == null or (result is Dictionary and result.is_empty()):
+		_shape_preview.update_box_wireframe(min_p, max_p)
+		return
+
+	var changes: Dictionary = result
+	var positions: Array[Vector3i] = []
+	positions.resize(changes.size())
+	var i := 0
+	for pos: Vector3i in changes:
+		positions[i] = pos
+		i += 1
+	_shape_preview.update_positions(positions)
+
+
+## Run the procedural shader over the box region and apply through undo.
+func _apply_procedural(tile: WFCTileDef, box: BoxShape) -> void:
+	if procedural_code.is_empty():
+		return
+
+	var min_p := Vector3i(
+		mini(box._start.x, box._end.x),
+		mini(box._start.y, box._end.y),
+		mini(box._start.z, box._end.z))
+	var max_p := Vector3i(
+		maxi(box._start.x, box._end.x),
+		maxi(box._start.y, box._end.y),
+		maxi(box._start.z, box._end.z))
+
+	# Include height extrusion if it was used
+	if box._height != 0:
+		var offset := box.face_normal * box._height
+		min_p = Vector3i(
+			mini(min_p.x, min_p.x + offset.x),
+			mini(min_p.y, min_p.y + offset.y),
+			mini(min_p.z, min_p.z + offset.z))
+		max_p = Vector3i(
+			maxi(max_p.x, max_p.x + offset.x),
+			maxi(max_p.y, max_p.y + offset.y),
+			maxi(max_p.z, max_p.z + offset.z))
+
+	var origin := min_p
+	var region_size := max_p - min_p + Vector3i.ONE
+
+	# Get voxel ID from palette
+	var palette := _editor_main.get_palette()
+	var vid: int = 1
+	if palette:
+		vid = palette.get_voxel_id(selected_palette_index)
+
+	var result: Variant = ProceduralTool.execute(tile, origin, region_size, vid, procedural_code)
+
+	if result is String:
+		_editor_main._update_status("Shader error: %s" % result)
+		return
+
+	var changes: Dictionary = result
+	if changes.is_empty():
+		_editor_main._update_status("Shader: no voxels changed")
+		return
+
+	var action := undo_manager.create_action("Procedural: %s (%d voxels)" % [procedural_preset, changes.size()])
+	for pos: Vector3i in changes:
+		var old_id := tile.get_voxel(pos.x, pos.y, pos.z)
+		undo_manager.add_voxel_change(action, pos, old_id, changes[pos])
+
+	var renderer := _editor_main.get_tile_renderer()
+	undo_manager.apply_and_commit(action, tile, renderer)
+	_editor_main._update_status("Shader: %d voxels generated" % changes.size())
 
 
 func _sync_hollow() -> void:
@@ -926,6 +1431,31 @@ func _sync_hollow() -> void:
 var _plane_hit_pos := Vector3i.ZERO
 var _plane_hit_float := Vector3.ZERO
 
+func snap_position(pos: Vector3i) -> Vector3i:
+	if snap_grid <= 1 or snap_mode == SnapMode.OFF:
+		return pos
+	if not Input.is_key_pressed(KEY_CTRL):
+		return pos
+	return force_snap_position(pos)
+
+
+func force_snap_position(pos: Vector3i) -> Vector3i:
+	var g := snap_grid
+	if snap_mode == SnapMode.CENTER:
+		var half := g / 2
+		return Vector3i(
+			(int(floorf(float(pos.x - half) / g)) * g) + half,
+			(int(floorf(float(pos.y - half) / g)) * g) + half,
+			(int(floorf(float(pos.z - half) / g)) * g) + half,
+		)
+	else:
+		return Vector3i(
+			int(roundf(float(pos.x) / g)) * g,
+			int(roundf(float(pos.y) / g)) * g,
+			int(roundf(float(pos.z) / g)) * g,
+		)
+
+
 func _project_onto_plane(ray_origin: Vector3, ray_dir: Vector3) -> bool:
 	var denom := _work_plane_normal.dot(ray_dir)
 	if absf(denom) < 0.0001:
@@ -936,6 +1466,7 @@ func _project_onto_plane(ray_origin: Vector3, ray_dir: Vector3) -> bool:
 	var hit := ray_origin + ray_dir * t
 	_plane_hit_float = hit
 	_plane_hit_pos = Vector3i(int(floorf(hit.x)), int(floorf(hit.y)), int(floorf(hit.z)))
+	_plane_hit_pos = snap_position(_plane_hit_pos)
 	return true
 
 
@@ -1174,7 +1705,7 @@ func begin_paste() -> void:
 
 func _commit_paste(tile: WFCTileDef, anchor: Vector3i) -> void:
 	_paste_mode = false
-	var paste_data := clipboard.get_paste_data(anchor)
+	var paste_data := clipboard.get_paste_data(anchor, tile)
 	var positions: Array = paste_data.positions
 	var voxel_ids: Dictionary = paste_data.voxel_ids
 	if positions.is_empty():
@@ -1223,7 +1754,7 @@ func _update_paste_preview(ray_origin: Vector3, ray_dir: Vector3) -> void:
 		# Fallback to ground plane when no voxels exist yet
 		anchor = _raycast_ground(ray_origin, ray_dir)
 	if anchor.x >= 0 and _shape_preview:
-		var preview := clipboard.get_paste_preview(anchor)
+		var preview := clipboard.get_paste_preview(anchor, _editor_main.get_tile())
 		_shape_preview.set_preview_color(PrimaryMode.ADD)
 		_shape_preview.update_positions(preview)
 	elif _shape_preview:
@@ -1351,7 +1882,7 @@ func flood_interior_selection() -> void:
 	var palette := _editor_main.get_palette()
 	if not tile or not palette or selection.is_empty():
 		return
-	var fill_id := palette.get_voxel_id(selected_palette_index)
+	var fill_id := _pick_voxel_id(palette)
 	var result := EditOperations.flood_interior(tile, selection, fill_id)
 	apply_edit_op(result, "Flood interior")
 
@@ -1361,7 +1892,7 @@ func dilate_selection(iterations: int = 1) -> void:
 	var palette := _editor_main.get_palette()
 	if not tile or not palette or selection.is_empty():
 		return
-	var fill_id := palette.get_voxel_id(selected_palette_index)
+	var fill_id := _pick_voxel_id(palette)
 	var result := EditOperations.dilate(tile, selection, fill_id, iterations)
 	apply_edit_op(result, "Dilate %d" % iterations)
 

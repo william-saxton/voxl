@@ -43,6 +43,63 @@ func _apply_shift(pos: Vector3i) -> Vector3i:
 	)
 
 
+func get_guide_markers() -> Dictionary:
+	var min_v := Vector3(
+		mini(_start.x, _end.x), mini(_start.y, _end.y), mini(_start.z, _end.z))
+	var max_v := Vector3(
+		maxi(_start.x, _end.x), maxi(_start.y, _end.y), maxi(_start.z, _end.z))
+
+	# If in height phase, extend along face_normal
+	if in_height_phase():
+		var offset := Vector3(face_normal) * _height
+		var ext_min := Vector3(
+			minf(min_v.x, min_v.x + offset.x),
+			minf(min_v.y, min_v.y + offset.y),
+			minf(min_v.z, min_v.z + offset.z))
+		var ext_max := Vector3(
+			maxf(max_v.x, max_v.x + offset.x),
+			maxf(max_v.y, max_v.y + offset.y),
+			maxf(max_v.z, max_v.z + offset.z))
+		min_v = ext_min
+		max_v = ext_max
+
+	# Center point (offset by 0.5 to be in voxel center space)
+	var center := (min_v + max_v) * 0.5 + Vector3(0.5, 0.5, 0.5)
+
+	# Edge midpoints — midpoint of each of the 12 edges of the AABB
+	var a0 := min_v + Vector3(0.5, 0.5, 0.5)
+	var b0 := max_v + Vector3(0.5, 0.5, 0.5)
+	var edge_mids: Array[Vector3] = []
+	# Bottom face edges (y = a0.y)
+	edge_mids.append(Vector3((a0.x + b0.x) * 0.5, a0.y, a0.z))  # bottom front
+	edge_mids.append(Vector3((a0.x + b0.x) * 0.5, a0.y, b0.z))  # bottom back
+	edge_mids.append(Vector3(a0.x, a0.y, (a0.z + b0.z) * 0.5))  # bottom left
+	edge_mids.append(Vector3(b0.x, a0.y, (a0.z + b0.z) * 0.5))  # bottom right
+	# Top face edges (y = b0.y)
+	edge_mids.append(Vector3((a0.x + b0.x) * 0.5, b0.y, a0.z))
+	edge_mids.append(Vector3((a0.x + b0.x) * 0.5, b0.y, b0.z))
+	edge_mids.append(Vector3(a0.x, b0.y, (a0.z + b0.z) * 0.5))
+	edge_mids.append(Vector3(b0.x, b0.y, (a0.z + b0.z) * 0.5))
+	# Vertical edges
+	edge_mids.append(Vector3(a0.x, (a0.y + b0.y) * 0.5, a0.z))
+	edge_mids.append(Vector3(b0.x, (a0.y + b0.y) * 0.5, a0.z))
+	edge_mids.append(Vector3(a0.x, (a0.y + b0.y) * 0.5, b0.z))
+	edge_mids.append(Vector3(b0.x, (a0.y + b0.y) * 0.5, b0.z))
+
+	# Remove duplicates (degenerate edges on flat boxes)
+	var unique_mids: Array[Vector3] = []
+	for m in edge_mids:
+		var is_dup := false
+		for u in unique_mids:
+			if m.is_equal_approx(u) or m.is_equal_approx(center):
+				is_dup = true
+				break
+		if not is_dup:
+			unique_mids.append(m)
+
+	return { "center": center, "edge_midpoints": unique_mids }
+
+
 static func _box_positions(a: Vector3i, b: Vector3i, is_hollow: bool) -> Array[Vector3i]:
 	var result: Array[Vector3i] = []
 	var min_x := mini(a.x, b.x)
