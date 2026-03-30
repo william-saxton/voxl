@@ -129,6 +129,7 @@ static func _build_script(code: String) -> String:
 	# Wrap user code in a function with all the standard variables as parameters
 	return """extends RefCounted
 
+@warning_ignore("unused_parameter")
 func run(x: int, y: int, z: int, current: int, sx: int, sy: int, sz: int,
 		cx: float, cy: float, cz: float, nx: float, ny: float, nz: float,
 		vid: int, ox: int, oy: int, oz: int) -> int:

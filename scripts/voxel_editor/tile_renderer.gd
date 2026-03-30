@@ -246,6 +246,12 @@ func mark_chunk_dirty(cx: int, cy: int, cz: int) -> void:
 	_dirty[cx + cy * _chunks_x + cz * _chunks_x * _chunks_y] = true
 
 
+## Mark a chunk dirty by flat index (used by native bulk_set_voxels).
+func mark_chunk_dirty_by_index(idx: int) -> void:
+	if idx >= 0 and idx < _dirty.size():
+		_dirty[idx] = true
+
+
 ## Mark the chunk containing voxel (vx, vy, vz) as dirty, plus neighbors if on boundary.
 func mark_voxel_dirty(vx: int, vy: int, vz: int) -> void:
 	var cx := vx >> 4

@@ -84,6 +84,14 @@ var _select_ref_id: int = -1  ## Voxel ID at first click for criteria filtering
 var procedural_code: String = ""
 var procedural_preset: String = ""
 signal procedural_preset_changed(preset_name: String)
+var _proc_pending_min := Vector3i.ZERO
+var _proc_pending_max := Vector3i.ZERO
+var _proc_dirty := false
+var _proc_skip := 0  ## Frame counter — skip N frames between shader runs
+var _proc_native: RefCounted  ## VoxelEditorNative for C++ shape preview
+## Maps preset name → C++ shape ID. Must match ProceduralShape enum order in C++.
+var _proc_shape_ids: Dictionary = {}
+var _proc_preview_instance: MeshInstance3D  ## Dedicated mesh instance for procedural preview
 
 ## Hollow toggle for box/circle/polygon shapes
 var hollow := false
@@ -169,6 +177,22 @@ func initialize(editor_main: VoxelEditorMain, viewport: SubViewport,
 	_metadata_renderer = MetadataRenderer.new()
 	_metadata_renderer.name = "MetadataRenderer"
 	viewport.add_child(_metadata_renderer)
+
+	# Create procedural preview mesh instance
+	_proc_preview_instance = MeshInstance3D.new()
+	_proc_preview_instance.name = "ProceduralPreview"
+	_proc_preview_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_proc_preview_instance.visible = false
+	viewport.add_child(_proc_preview_instance)
+
+	# Init C++ procedural shape support
+	if ClassDB.class_exists(&"VoxelEditorNative"):
+		_proc_native = ClassDB.instantiate(&"VoxelEditorNative")
+	# Build preset name → shape ID mapping (must match C++ enum order)
+	var shape_id := 0
+	for preset_name in ProceduralTool.PRESETS:
+		_proc_shape_ids[preset_name] = shape_id
+		shape_id += 1
 
 	selection.selection_changed.connect(func(): _on_selection_changed())
 	undo_manager.on_selection_restore = func(positions: Array):
@@ -349,6 +373,12 @@ func _unhandled_input(event: InputEvent) -> void:
 func _process(_delta: float) -> void:
 	if not _camera or not _viewport:
 		return
+	if _proc_dirty:
+		if _proc_skip <= 0:
+			_proc_dirty = false
+			_run_procedural_preview_gdscript(_proc_pending_min, _proc_pending_max)
+		else:
+			_proc_skip -= 1
 	_update_hover()
 
 
@@ -644,9 +674,14 @@ func handle_viewport_click(event: InputEventMouseButton) -> void:
 				else:
 					_apply_mode_to_positions(positions, tile, palette)
 				_reset_numeric()
+				_proc_dirty = false
+				if _proc_preview_instance:
+					_proc_preview_instance.visible = false
 				if _shape_preview:
 					_shape_preview.clear()
 			else:
+				if _proc_preview_instance:
+					_proc_preview_instance.visible = false
 				if _shape_preview:
 					_shape_preview.clear()
 			return
@@ -750,27 +785,68 @@ func _apply_mode_to_positions(positions: Array[Vector3i], tile: WFCTileDef,
 
 	# Expand positions through symmetry
 	var all_positions: Array[Vector3i] = _expand_with_symmetry(positions)
+	_apply_mode_common(all_positions, tile, palette, _mode_action_name())
 
-	var use_gradient := gradient_panel and gradient_panel.visible
-	var voxel_id := _pick_voxel_id(palette) if not use_gradient else 0
-	var action := undo_manager.create_action(_mode_action_name())
+
+## Shared native/fallback apply logic for shapes, fill, and extrude.
+## voxel_id_overrides: optional Dictionary[Vector3i, int] for per-position IDs (extrude clone).
+func _apply_mode_common(all_positions: Array[Vector3i], tile: WFCTileDef,
+		palette: VoxelPalette, description: String,
+		voxel_id_overrides: Dictionary = {}) -> void:
+	if all_positions.is_empty():
+		return
 	var renderer := _editor_main.get_tile_renderer()
+	var use_gradient := gradient_panel and gradient_panel.visible
+	var has_overrides := not voxel_id_overrides.is_empty()
 
+	# Try native C++ path
+	if undo_manager.has_native():
+		var count := all_positions.size()
+		var pos_flat := PackedInt32Array()
+		pos_flat.resize(count * 3)
+		var vid_flat := PackedInt32Array()
+		vid_flat.resize(count)
+		var base_vid := _pick_voxel_id(palette) if not use_gradient else 0
+		for i in count:
+			var p: Vector3i = all_positions[i]
+			pos_flat[i * 3] = p.x
+			pos_flat[i * 3 + 1] = p.y
+			pos_flat[i * 3 + 2] = p.z
+			if has_overrides and voxel_id_overrides.has(p):
+				vid_flat[i] = voxel_id_overrides[p]
+			elif use_gradient:
+				vid_flat[i] = _pick_voxel_id(palette)
+			else:
+				vid_flat[i] = base_vid
+		var mode_int := 0
+		if current_mode == PrimaryMode.SUBTRACT:
+			mode_int = 1
+		elif current_mode == PrimaryMode.PAINT:
+			mode_int = 2
+		undo_manager.apply_mode_native(pos_flat, vid_flat, mode_int, description,
+			tile, renderer)
+		return
+
+	# GDScript fallback
+	var voxel_id := _pick_voxel_id(palette) if not use_gradient else 0
+	var action := undo_manager.create_action(description)
 	for pos in all_positions:
 		if not _in_bounds(pos):
 			continue
 		var old_id := tile.get_voxel(pos.x, pos.y, pos.z)
-		if use_gradient:
-			voxel_id = _pick_voxel_id(palette)
+		var target_id := voxel_id
+		if has_overrides and voxel_id_overrides.has(pos):
+			target_id = voxel_id_overrides[pos]
+		elif use_gradient:
+			target_id = _pick_voxel_id(palette)
 		match current_mode:
 			PrimaryMode.ADD:
-				undo_manager.add_voxel_change(action, pos, old_id, voxel_id)
+				undo_manager.add_voxel_change(action, pos, old_id, target_id)
 			PrimaryMode.SUBTRACT:
 				undo_manager.add_voxel_change(action, pos, old_id, 0)
 			PrimaryMode.PAINT:
-				if old_id != 0:  # Only paint non-air
-					undo_manager.add_voxel_change(action, pos, old_id, voxel_id)
-
+				if old_id != 0:
+					undo_manager.add_voxel_change(action, pos, old_id, target_id)
 	undo_manager.apply_and_commit(action, tile, renderer)
 
 
@@ -832,27 +908,7 @@ func _handle_fill_click(tile: WFCTileDef, palette: VoxelPalette,
 		return
 
 	var positions: Array[Vector3i] = _expand_with_symmetry(raw_positions)
-	var use_gradient := gradient_panel and gradient_panel.visible
-	var voxel_id := _pick_voxel_id(palette) if not use_gradient else 0
-	var action := undo_manager.create_action("Fill")
-	var renderer := _editor_main.get_tile_renderer()
-
-	for pos in positions:
-		if not _in_bounds(pos):
-			continue
-		var old_id := tile.get_voxel(pos.x, pos.y, pos.z)
-		if use_gradient:
-			voxel_id = _pick_voxel_id(palette)
-		match current_mode:
-			PrimaryMode.ADD:
-				undo_manager.add_voxel_change(action, pos, old_id, voxel_id)
-			PrimaryMode.SUBTRACT:
-				undo_manager.add_voxel_change(action, pos, old_id, 0)
-			PrimaryMode.PAINT:
-				if old_id != 0:
-					undo_manager.add_voxel_change(action, pos, old_id, voxel_id)
-
-	undo_manager.apply_and_commit(action, tile, renderer)
+	_apply_mode_common(positions, tile, palette, "Fill")
 
 
 func _handle_extrude_click(tile: WFCTileDef, _palette: VoxelPalette,
@@ -885,29 +941,10 @@ func _handle_extrude_release(tile: WFCTileDef, palette: VoxelPalette) -> void:
 		sym_targets.append(t as Vector3i)
 	sym_targets = _expand_with_symmetry(sym_targets)
 
-	var use_gradient := gradient_panel and gradient_panel.visible
-	var voxel_id := _pick_voxel_id(palette) if not use_gradient else 0
-	var action := undo_manager.create_action("Extrude %d layers" % layer_count)
-	var renderer := _editor_main.get_tile_renderer()
-
-	for i in sym_targets.size():
-		var pos: Vector3i = sym_targets[i]
-		if not _in_bounds(pos):
-			continue
-		var old_id := tile.get_voxel(pos.x, pos.y, pos.z)
-		if use_gradient:
-			voxel_id = _pick_voxel_id(palette)
-		match current_mode:
-			PrimaryMode.ADD:
-				var src_id: int = ext_result.voxel_ids.get(pos, voxel_id)
-				undo_manager.add_voxel_change(action, pos, old_id, src_id)
-			PrimaryMode.SUBTRACT:
-				undo_manager.add_voxel_change(action, pos, old_id, 0)
-			PrimaryMode.PAINT:
-				if old_id != 0:
-					undo_manager.add_voxel_change(action, pos, old_id, voxel_id)
-
-	undo_manager.apply_and_commit(action, tile, renderer)
+	# Pass extrude's per-position voxel IDs as overrides (for cloning surface materials)
+	var overrides: Dictionary = ext_result.get("voxel_ids", {})
+	_apply_mode_common(sym_targets, tile, palette,
+		"Extrude %d layers" % layer_count, overrides)
 
 
 ## Handle mouse drag for extrude tool preview updates.
@@ -940,6 +977,11 @@ func _cancel_shape() -> void:
 	if current_shape.active:
 		current_shape.cancel()
 	_reset_numeric()
+	_proc_dirty = false
+	_proc_pending_min = Vector3i.ZERO
+	_proc_pending_max = Vector3i.ZERO
+	if _proc_preview_instance:
+		_proc_preview_instance.visible = false
 	if _shape_preview:
 		_shape_preview.clear()
 
@@ -996,9 +1038,18 @@ func _update_shape_preview() -> void:
 			min_p = ext_min
 			max_p = ext_max
 
-		# Procedural mode: run shader and show actual shape
+		# Procedural mode: use C++ for known presets, defer for custom code
 		if current_tool_type == ToolType.PROCEDURAL and not procedural_code.is_empty():
-			_run_procedural_preview(min_p, max_p)
+			if _proc_native and _proc_shape_ids.has(procedural_preset):
+				# Native preset — run C++ surface mesh builder directly (fast)
+				_run_procedural_preview_native(min_p, max_p)
+			else:
+				# Custom code — defer GDScript shader, keep last preview visible
+				if min_p != _proc_pending_min or max_p != _proc_pending_max:
+					_proc_pending_min = min_p
+					_proc_pending_max = max_p
+					_proc_dirty = true
+					_proc_skip = 3
 			return
 
 		_shape_preview.update_box_wireframe(min_p, max_p)
@@ -1327,18 +1378,42 @@ func set_procedural_code(code: String) -> void:
 	procedural_preset_changed.emit(procedural_preset)
 
 
-## Run the procedural shader and display the result as the shape preview.
-func _run_procedural_preview(min_p: Vector3i, max_p: Vector3i) -> void:
+## Run the C++ procedural shape preview — returns an ArrayMesh directly.
+func _run_procedural_preview_native(min_p: Vector3i, max_p: Vector3i) -> void:
+	var region_size := max_p - min_p + Vector3i.ONE
+	var shape_id: int = _proc_shape_ids[procedural_preset]
+	var color := Color(0.3, 0.7, 1.0, 0.3)
+	var mesh: ArrayMesh = _proc_native.procedural_preview_mesh(shape_id, min_p, region_size, color)
+
+	# Hide the regular shape preview, use our dedicated instance
+	_shape_preview.clear()
+
+	if mesh:
+		# Set up a translucent unshaded material
+		if _proc_preview_instance.get_surface_override_material_count() == 0 or not _proc_preview_instance.mesh:
+			var mat := StandardMaterial3D.new()
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mat.no_depth_test = true
+			mat.vertex_color_use_as_albedo = true
+			_proc_preview_instance.material_override = mat
+		_proc_preview_instance.mesh = mesh
+		_proc_preview_instance.visible = true
+	else:
+		_proc_preview_instance.visible = false
+
+
+## Run the GDScript procedural shader (fallback for custom code).
+func _run_procedural_preview_gdscript(min_p: Vector3i, max_p: Vector3i) -> void:
 	var tile := _editor_main.get_tile()
 	if not tile:
 		_shape_preview.update_box_wireframe(min_p, max_p)
 		return
 
 	var region_size := max_p - min_p + Vector3i.ONE
-
-	# Cap preview volume to avoid stalls
 	var vol: int = region_size.x * region_size.y * region_size.z
-	if vol > 200000:
+	if vol > 500000:
 		_shape_preview.update_box_wireframe(min_p, max_p)
 		return
 
@@ -1360,7 +1435,7 @@ func _run_procedural_preview(min_p: Vector3i, max_p: Vector3i) -> void:
 	for pos: Vector3i in changes:
 		positions[i] = pos
 		i += 1
-	_shape_preview.update_positions(positions)
+	_shape_preview.update_surface(positions)
 
 
 ## Run the procedural shader over the box region and apply through undo.
@@ -1398,24 +1473,48 @@ func _apply_procedural(tile: WFCTileDef, box: BoxShape) -> void:
 	if palette:
 		vid = palette.get_voxel_id(selected_palette_index)
 
-	var result: Variant = ProceduralTool.execute(tile, origin, region_size, vid, procedural_code)
-
-	if result is String:
-		_editor_main._update_status("Shader error: %s" % result)
-		return
-
-	var changes: Dictionary = result
+	var changes: Dictionary
+	# Use C++ for known presets (much faster), GDScript for custom code
+	if _proc_native and _proc_shape_ids.has(procedural_preset):
+		var shape_id: int = _proc_shape_ids[procedural_preset]
+		changes = _proc_native.procedural_execute(shape_id, tile.voxel_data, origin, region_size, vid,
+			tile.tile_size_x, tile.tile_size_y, tile.tile_size_z)
+	else:
+		var result: Variant = ProceduralTool.execute(tile, origin, region_size, vid, procedural_code)
+		if result is String:
+			_editor_main._update_status("Shader error: %s" % result)
+			return
+		changes = result
 	if changes.is_empty():
 		_editor_main._update_status("Shader: no voxels changed")
 		return
 
-	var action := undo_manager.create_action("Procedural: %s (%d voxels)" % [procedural_preset, changes.size()])
-	for pos: Vector3i in changes:
-		var old_id := tile.get_voxel(pos.x, pos.y, pos.z)
-		undo_manager.add_voxel_change(action, pos, old_id, changes[pos])
+	var description := "Procedural: %s (%d voxels)" % [procedural_preset, changes.size()]
 
-	var renderer := _editor_main.get_tile_renderer()
-	undo_manager.apply_and_commit(action, tile, renderer)
+	# Use native path: pack positions + per-position voxel IDs, mode=ADD
+	if undo_manager.has_native():
+		var count := changes.size()
+		var pos_flat := PackedInt32Array()
+		pos_flat.resize(count * 3)
+		var vid_flat := PackedInt32Array()
+		vid_flat.resize(count)
+		var i := 0
+		for pos: Vector3i in changes:
+			pos_flat[i * 3] = pos.x
+			pos_flat[i * 3 + 1] = pos.y
+			pos_flat[i * 3 + 2] = pos.z
+			vid_flat[i] = changes[pos]
+			i += 1
+		var renderer := _editor_main.get_tile_renderer()
+		undo_manager.apply_mode_native(pos_flat, vid_flat, 0, description,
+			tile, renderer)
+	else:
+		var action := undo_manager.create_action(description)
+		for pos: Vector3i in changes:
+			var old_id := tile.get_voxel(pos.x, pos.y, pos.z)
+			undo_manager.add_voxel_change(action, pos, old_id, changes[pos])
+		var renderer := _editor_main.get_tile_renderer()
+		undo_manager.apply_and_commit(action, tile, renderer)
 	_editor_main._update_status("Shader: %d voxels generated" % changes.size())
 
 

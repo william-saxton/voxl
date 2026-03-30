@@ -39,6 +39,22 @@ void VoxelEditorNative::_bind_methods() {
 			"tile_x", "tile_y", "tile_z"),
 			&VoxelEditorNative::find_surface,
 			DEFVAL(DEFAULT_TILE_X), DEFVAL(DEFAULT_TILE_Y), DEFVAL(DEFAULT_TILE_Z));
+
+	ClassDB::bind_method(D_METHOD("bulk_set_voxels", "voxel_data", "changes", "tile_x", "tile_y", "tile_z"),
+			&VoxelEditorNative::bulk_set_voxels);
+	ClassDB::bind_method(D_METHOD("apply_mode_changes", "voxel_data", "positions", "voxel_ids", "mode",
+			"tile_x", "tile_y", "tile_z"),
+			&VoxelEditorNative::apply_mode_changes);
+	ClassDB::bind_method(D_METHOD("apply_undo_diffs", "voxel_data", "packed_diffs", "use_new_id",
+			"tile_x", "tile_y", "tile_z"),
+			&VoxelEditorNative::apply_undo_diffs);
+	ClassDB::bind_method(D_METHOD("procedural_preview_mesh", "shape_id", "origin", "region_size", "color"),
+			&VoxelEditorNative::procedural_preview_mesh);
+	ClassDB::bind_method(D_METHOD("procedural_execute", "shape_id", "voxel_data", "origin", "region_size", "vid",
+			"tile_x", "tile_y", "tile_z"),
+			&VoxelEditorNative::procedural_execute,
+			DEFVAL(DEFAULT_TILE_X), DEFVAL(DEFAULT_TILE_Y), DEFVAL(DEFAULT_TILE_Z));
+
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -588,6 +604,532 @@ PackedVector3Array VoxelEditorNative::find_surface(
 
 			visited[ni] = true;
 			queue.push(Vector3i(nx, ny, nz));
+		}
+	}
+
+	return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Bulk Voxel Writes
+// ═══════════════════════════════════════════════════════════════════════════
+
+Dictionary VoxelEditorNative::bulk_set_voxels(
+		PackedByteArray voxel_data,
+		const PackedInt32Array &changes,
+		int tile_x, int tile_y, int tile_z) {
+
+	Dictionary result;
+	int count = changes.size() / 4;
+	if (count == 0) {
+		result["voxel_data"] = voxel_data;
+		result["dirty_chunks"] = PackedInt32Array();
+		return result;
+	}
+
+	int data_size = voxel_data.size();
+	uint8_t *data = voxel_data.ptrw();
+	const int *ch = changes.ptr();
+
+	int chunks_x = (tile_x + CHUNK_SIZE - 1) / CHUNK_SIZE;
+	int chunks_y = (tile_y + CHUNK_SIZE - 1) / CHUNK_SIZE;
+	int chunks_z = (tile_z + CHUNK_SIZE - 1) / CHUNK_SIZE;
+	int total_chunks = chunks_x * chunks_y * chunks_z;
+
+	// Track dirty chunks as a bitset
+	std::vector<bool> dirty(total_chunks, false);
+
+	for (int i = 0; i < count; i++) {
+		int x = ch[i * 4];
+		int y = ch[i * 4 + 1];
+		int z = ch[i * 4 + 2];
+		uint16_t vid = (uint16_t)ch[i * 4 + 3];
+
+		if (!_in_bounds(x, y, z, tile_x, tile_y, tile_z)) continue;
+
+		int idx = _voxel_index(x, y, z, tile_x, tile_y);
+		if (idx + 1 >= data_size) continue;
+		data[idx] = vid & 0xFF;
+		data[idx + 1] = (vid >> 8) & 0xFF;
+
+		// Mark chunk dirty
+		int cx = x >> 4, cy = y >> 4, cz = z >> 4;
+		if (cx >= 0 && cx < chunks_x && cy >= 0 && cy < chunks_y && cz >= 0 && cz < chunks_z) {
+			dirty[cx + cy * chunks_x + cz * chunks_x * chunks_y] = true;
+		}
+		// Boundary neighbors
+		if ((x & 0xF) == 0 && cx - 1 >= 0)
+			dirty[(cx-1) + cy * chunks_x + cz * chunks_x * chunks_y] = true;
+		else if ((x & 0xF) == 15 && cx + 1 < chunks_x)
+			dirty[(cx+1) + cy * chunks_x + cz * chunks_x * chunks_y] = true;
+		if ((y & 0xF) == 0 && cy - 1 >= 0)
+			dirty[cx + (cy-1) * chunks_x + cz * chunks_x * chunks_y] = true;
+		else if ((y & 0xF) == 15 && cy + 1 < chunks_y)
+			dirty[cx + (cy+1) * chunks_x + cz * chunks_x * chunks_y] = true;
+		if ((z & 0xF) == 0 && cz - 1 >= 0)
+			dirty[cx + cy * chunks_x + (cz-1) * chunks_x * chunks_y] = true;
+		else if ((z & 0xF) == 15 && cz + 1 < chunks_z)
+			dirty[cx + cy * chunks_x + (cz+1) * chunks_x * chunks_y] = true;
+	}
+
+	// Collect dirty chunk indices
+	PackedInt32Array dirty_chunks;
+	for (int i = 0; i < total_chunks; i++) {
+		if (dirty[i]) dirty_chunks.push_back(i);
+	}
+
+	result["voxel_data"] = voxel_data;
+	result["dirty_chunks"] = dirty_chunks;
+	return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Mode-based shape apply — full pipeline in C++
+// ═══════════════════════════════════════════════════════════════════════════
+
+Dictionary VoxelEditorNative::apply_mode_changes(
+		PackedByteArray voxel_data,
+		const PackedInt32Array &positions,
+		const PackedInt32Array &voxel_ids,
+		int mode,
+		int tile_x, int tile_y, int tile_z) {
+
+	Dictionary result;
+	int pos_count = positions.size() / 3;
+	if (pos_count == 0 || voxel_ids.size() < pos_count) {
+		result["voxel_data"] = voxel_data;
+		result["dirty_chunks"] = PackedInt32Array();
+		result["undo_diffs"] = PackedInt32Array();
+		return result;
+	}
+
+	int data_size = voxel_data.size();
+	if (data_size == 0) {
+		result["voxel_data"] = voxel_data;
+		result["dirty_chunks"] = PackedInt32Array();
+		result["undo_diffs"] = PackedInt32Array();
+		return result;
+	}
+
+	uint8_t *data = voxel_data.ptrw();
+	const int *pos_ptr = positions.ptr();
+	const int *vid_ptr = voxel_ids.ptr();
+
+	int chunks_x = (tile_x + CHUNK_SIZE - 1) / CHUNK_SIZE;
+	int chunks_y = (tile_y + CHUNK_SIZE - 1) / CHUNK_SIZE;
+	int chunks_z = (tile_z + CHUNK_SIZE - 1) / CHUNK_SIZE;
+	int total_chunks = chunks_x * chunks_y * chunks_z;
+	std::vector<bool> dirty(total_chunks, false);
+
+	// Pre-allocate max undo diffs: 5 ints per entry [x, y, z, old_id, new_id]
+	PackedInt32Array undo_diffs;
+	undo_diffs.resize(pos_count * 5);
+	int *diff_ptr = undo_diffs.ptrw();
+	int diff_count = 0;
+
+	for (int i = 0; i < pos_count; i++) {
+		int x = pos_ptr[i * 3];
+		int y = pos_ptr[i * 3 + 1];
+		int z = pos_ptr[i * 3 + 2];
+
+		if (!_in_bounds(x, y, z, tile_x, tile_y, tile_z)) continue;
+
+		int idx = _voxel_index(x, y, z, tile_x, tile_y);
+		if (idx + 1 >= data_size) continue;
+
+		uint16_t old_id = data[idx] | (data[idx + 1] << 8);
+		uint16_t new_id = old_id;
+		uint16_t target_vid = (uint16_t)vid_ptr[i];
+
+		switch (mode) {
+			case 0: // ADD
+				new_id = target_vid;
+				break;
+			case 1: // SUBTRACT
+				new_id = 0;
+				break;
+			case 2: // PAINT
+				if (old_id != 0) new_id = target_vid;
+				break;
+		}
+
+		if (new_id == old_id) continue;
+
+		// Write voxel
+		data[idx] = new_id & 0xFF;
+		data[idx + 1] = (new_id >> 8) & 0xFF;
+
+		// Record undo diff
+		int d = diff_count * 5;
+		diff_ptr[d] = x;
+		diff_ptr[d + 1] = y;
+		diff_ptr[d + 2] = z;
+		diff_ptr[d + 3] = old_id;
+		diff_ptr[d + 4] = new_id;
+		diff_count++;
+
+		// Mark chunk dirty + boundary neighbors
+		int cx = x >> 4, cy = y >> 4, cz = z >> 4;
+		if (cx >= 0 && cx < chunks_x && cy >= 0 && cy < chunks_y && cz >= 0 && cz < chunks_z) {
+			dirty[cx + cy * chunks_x + cz * chunks_x * chunks_y] = true;
+		}
+		if ((x & 0xF) == 0 && cx - 1 >= 0)
+			dirty[(cx-1) + cy * chunks_x + cz * chunks_x * chunks_y] = true;
+		else if ((x & 0xF) == 15 && cx + 1 < chunks_x)
+			dirty[(cx+1) + cy * chunks_x + cz * chunks_x * chunks_y] = true;
+		if ((y & 0xF) == 0 && cy - 1 >= 0)
+			dirty[cx + (cy-1) * chunks_x + cz * chunks_x * chunks_y] = true;
+		else if ((y & 0xF) == 15 && cy + 1 < chunks_y)
+			dirty[cx + (cy+1) * chunks_x + cz * chunks_x * chunks_y] = true;
+		if ((z & 0xF) == 0 && cz - 1 >= 0)
+			dirty[cx + cy * chunks_x + (cz-1) * chunks_x * chunks_y] = true;
+		else if ((z & 0xF) == 15 && cz + 1 < chunks_z)
+			dirty[cx + cy * chunks_x + (cz+1) * chunks_x * chunks_y] = true;
+	}
+
+	// Trim to actual count
+	undo_diffs.resize(diff_count * 5);
+
+	PackedInt32Array dirty_chunks;
+	for (int i = 0; i < total_chunks; i++) {
+		if (dirty[i]) dirty_chunks.push_back(i);
+	}
+
+	result["voxel_data"] = voxel_data;
+	result["dirty_chunks"] = dirty_chunks;
+	result["undo_diffs"] = undo_diffs;
+	return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Apply packed undo diffs (for undo/redo)
+// ═══════════════════════════════════════════════════════════════════════════
+
+Dictionary VoxelEditorNative::apply_undo_diffs(
+		PackedByteArray voxel_data,
+		const PackedInt32Array &packed_diffs,
+		bool use_new_id,
+		int tile_x, int tile_y, int tile_z) {
+
+	Dictionary result;
+	int count = packed_diffs.size() / 5;
+	if (count == 0) {
+		result["voxel_data"] = voxel_data;
+		result["dirty_chunks"] = PackedInt32Array();
+		return result;
+	}
+
+	int data_size = voxel_data.size();
+	if (data_size == 0) {
+		result["voxel_data"] = voxel_data;
+		result["dirty_chunks"] = PackedInt32Array();
+		return result;
+	}
+
+	uint8_t *data = voxel_data.ptrw();
+	const int *dp = packed_diffs.ptr();
+
+	int chunks_x = (tile_x + CHUNK_SIZE - 1) / CHUNK_SIZE;
+	int chunks_y = (tile_y + CHUNK_SIZE - 1) / CHUNK_SIZE;
+	int chunks_z = (tile_z + CHUNK_SIZE - 1) / CHUNK_SIZE;
+	int total_chunks = chunks_x * chunks_y * chunks_z;
+	std::vector<bool> dirty(total_chunks, false);
+
+	// offset 3 = old_id, offset 4 = new_id
+	int id_offset = use_new_id ? 4 : 3;
+
+	for (int i = 0; i < count; i++) {
+		int base = i * 5;
+		int x = dp[base];
+		int y = dp[base + 1];
+		int z = dp[base + 2];
+		uint16_t vid = (uint16_t)dp[base + id_offset];
+
+		if (!_in_bounds(x, y, z, tile_x, tile_y, tile_z)) continue;
+
+		int idx = _voxel_index(x, y, z, tile_x, tile_y);
+		if (idx + 1 >= data_size) continue;
+
+		data[idx] = vid & 0xFF;
+		data[idx + 1] = (vid >> 8) & 0xFF;
+
+		int cx = x >> 4, cy = y >> 4, cz = z >> 4;
+		if (cx >= 0 && cx < chunks_x && cy >= 0 && cy < chunks_y && cz >= 0 && cz < chunks_z) {
+			dirty[cx + cy * chunks_x + cz * chunks_x * chunks_y] = true;
+		}
+		if ((x & 0xF) == 0 && cx - 1 >= 0)
+			dirty[(cx-1) + cy * chunks_x + cz * chunks_x * chunks_y] = true;
+		else if ((x & 0xF) == 15 && cx + 1 < chunks_x)
+			dirty[(cx+1) + cy * chunks_x + cz * chunks_x * chunks_y] = true;
+		if ((y & 0xF) == 0 && cy - 1 >= 0)
+			dirty[cx + (cy-1) * chunks_x + cz * chunks_x * chunks_y] = true;
+		else if ((y & 0xF) == 15 && cy + 1 < chunks_y)
+			dirty[cx + (cy+1) * chunks_x + cz * chunks_x * chunks_y] = true;
+		if ((z & 0xF) == 0 && cz - 1 >= 0)
+			dirty[cx + cy * chunks_x + (cz-1) * chunks_x * chunks_y] = true;
+		else if ((z & 0xF) == 15 && cz + 1 < chunks_z)
+			dirty[cx + cy * chunks_x + (cz+1) * chunks_x * chunks_y] = true;
+	}
+
+	PackedInt32Array dirty_chunks;
+	for (int i = 0; i < total_chunks; i++) {
+		if (dirty[i]) dirty_chunks.push_back(i);
+	}
+
+	result["voxel_data"] = voxel_data;
+	result["dirty_chunks"] = dirty_chunks;
+	return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Procedural Shape Evaluation
+// ═══════════════════════════════════════════════════════════════════════════
+
+bool VoxelEditorNative::_eval_shape(int shape_id,
+		int x, int y, int z,
+		int ox, int oy, int oz,
+		int sx, int sy, int sz,
+		double cx, double cy, double cz) {
+
+	switch (shape_id) {
+		case SHAPE_SPHERE: {
+			double r = std::min({sx, sy, sz}) * 0.5;
+			double dx = x - cx, dy = y - cy, dz = z - cz;
+			return std::sqrt(dx*dx + dy*dy + dz*dz) <= r;
+		}
+		case SHAPE_HOLLOW_SPHERE: {
+			double r = std::min({sx, sy, sz}) * 0.5;
+			double dx = x - cx, dy = y - cy, dz = z - cz;
+			double d = std::sqrt(dx*dx + dy*dy + dz*dz);
+			return d <= r && d >= r - 1.5;
+		}
+		case SHAPE_CYLINDER_Y: {
+			double r = std::min(sx, sz) * 0.5;
+			double dx = x - cx, dz = z - cz;
+			return std::sqrt(dx*dx + dz*dz) <= r;
+		}
+		case SHAPE_TORUS_Y: {
+			double R = std::min(sx, sz) * 0.35;
+			double r = std::min(sx, sz) * 0.15;
+			double dx = x - cx, dz = z - cz;
+			double ring = std::sqrt(dx*dx + dz*dz);
+			double d = std::sqrt((ring - R)*(ring - R) + (y - cy)*(y - cy));
+			return d <= r;
+		}
+		case SHAPE_ARCH_Z: {
+			double R = std::min(sx, sy) * 0.4;
+			double r = std::min(sx, sy) * 0.12;
+			double arch_x = x - cx;
+			double arch_y = y - (double)oy;
+			double ring = std::sqrt(arch_x*arch_x + arch_y*arch_y);
+			double d = std::sqrt((ring - R)*(ring - R) + (z - cz)*(z - cz));
+			return d <= r && arch_y >= 0;
+		}
+		case SHAPE_DOME: {
+			double r = std::min({sx, sy * 2, sz}) * 0.5;
+			double dx = x - cx, dy = y - (double)oy, dz = z - cz;
+			return std::sqrt(dx*dx + dy*dy + dz*dz) <= r && y >= oy;
+		}
+		case SHAPE_NOISE_TERRAIN: {
+			double h = sy * 0.3 + sy * 0.3 * std::sin(x * 0.15) * std::cos(z * 0.15)
+					 + sy * 0.15 * std::sin(x * 0.3 + 1.7) * std::cos(z * 0.25 + 0.8);
+			return y < oy + h;
+		}
+		case SHAPE_PYRAMID: {
+			int layer = y - oy;
+			double half_x = (sx - 1.0) / 2.0 - layer;
+			double half_z = (sz - 1.0) / 2.0 - layer;
+			return half_x >= 0 && half_z >= 0
+				&& std::abs(x - cx) <= half_x
+				&& std::abs(z - cz) <= half_z;
+		}
+		case SHAPE_CONE_Y: {
+			double progress = (double)(y - oy) / std::max(sy - 1, 1);
+			double r = (1.0 - progress) * std::min(sx, sz) * 0.5;
+			double dx = x - cx, dz = z - cz;
+			return std::sqrt(dx*dx + dz*dz) <= r;
+		}
+		case SHAPE_STAIRS_Z: {
+			int step_depth = std::max(sz / 8, 1);
+			int step_idx = (z - oz) / step_depth;
+			int step_height = step_idx + 1;
+			return (y - oy) < step_height;
+		}
+		case SHAPE_SPIRAL_Y: {
+			double progress = (double)(y - oy) / std::max(sy - 1, 1);
+			double angle = progress * 6.283185307 * 3.0; // TAU * 3
+			double r = std::min(sx, sz) * 0.4;
+			double cx2 = cx + std::cos(angle) * r * 0.5;
+			double cz2 = cz + std::sin(angle) * r * 0.5;
+			double dx = x - cx2, dz = z - cz2;
+			return std::sqrt(dx*dx + dz*dz) <= r * 0.25;
+		}
+		case SHAPE_CHECKERBOARD: {
+			return (x + y + z) % 2 == 0;
+		}
+		case SHAPE_CLEAR: {
+			return true; // Fill everything (caller handles setting to air)
+		}
+		default:
+			return false;
+	}
+}
+
+Ref<ArrayMesh> VoxelEditorNative::_build_surface_mesh(
+		const std::vector<bool> &filled,
+		const Vector3i &origin, const Vector3i &region_size,
+		const Color &color) {
+
+	int sx = region_size.x, sy = region_size.y, sz = region_size.z;
+
+	// Neighbor offsets and face vertex offsets (4 corners per face, CCW from outside)
+	static const int face_dir[6][3] = {
+		{ 1, 0, 0}, {-1, 0, 0},
+		{ 0, 1, 0}, { 0,-1, 0},
+		{ 0, 0, 1}, { 0, 0,-1},
+	};
+	// Each face has 4 corner offsets (x, y, z) relative to the voxel origin
+	static const float face_corners[6][4][3] = {
+		// +X
+		{{1,0,0}, {1,0,1}, {1,1,1}, {1,1,0}},
+		// -X
+		{{0,0,1}, {0,0,0}, {0,1,0}, {0,1,1}},
+		// +Y
+		{{0,1,0}, {1,1,0}, {1,1,1}, {0,1,1}},
+		// -Y
+		{{0,0,1}, {1,0,1}, {1,0,0}, {0,0,0}},
+		// +Z
+		{{0,0,1}, {0,1,1}, {1,1,1}, {1,0,1}},
+		// -Z
+		{{1,0,0}, {1,1,0}, {0,1,0}, {0,0,0}},
+	};
+
+	PackedVector3Array verts;
+	PackedColorArray colors;
+
+	auto idx = [sx, sy](int lx, int ly, int lz) -> int {
+		return lx + ly * sx + lz * sx * sy;
+	};
+
+	for (int lz = 0; lz < sz; lz++) {
+		for (int ly = 0; ly < sy; ly++) {
+			for (int lx = 0; lx < sx; lx++) {
+				if (!filled[idx(lx, ly, lz)]) continue;
+
+				float wx = (float)(origin.x + lx);
+				float wy = (float)(origin.y + ly);
+				float wz = (float)(origin.z + lz);
+
+				for (int f = 0; f < 6; f++) {
+					int nx = lx + face_dir[f][0];
+					int ny = ly + face_dir[f][1];
+					int nz = lz + face_dir[f][2];
+
+					// If neighbor is out of bounds or not filled, this face is exposed
+					bool neighbor_filled = (nx >= 0 && nx < sx && ny >= 0 && ny < sy && nz >= 0 && nz < sz)
+							&& filled[idx(nx, ny, nz)];
+					if (neighbor_filled) continue;
+
+					const float (*c)[3] = face_corners[f];
+					// Two triangles: 0-1-2, 0-2-3
+					verts.push_back(Vector3(wx + c[0][0], wy + c[0][1], wz + c[0][2]));
+					verts.push_back(Vector3(wx + c[1][0], wy + c[1][1], wz + c[1][2]));
+					verts.push_back(Vector3(wx + c[2][0], wy + c[2][1], wz + c[2][2]));
+					verts.push_back(Vector3(wx + c[0][0], wy + c[0][1], wz + c[0][2]));
+					verts.push_back(Vector3(wx + c[2][0], wy + c[2][1], wz + c[2][2]));
+					verts.push_back(Vector3(wx + c[3][0], wy + c[3][1], wz + c[3][2]));
+
+					for (int v = 0; v < 6; v++) {
+						colors.push_back(color);
+					}
+				}
+			}
+		}
+	}
+
+	if (verts.size() == 0) {
+		return Ref<ArrayMesh>();
+	}
+
+	Array arrays;
+	arrays.resize(Mesh::ARRAY_MAX);
+	arrays[Mesh::ARRAY_VERTEX] = verts;
+	arrays[Mesh::ARRAY_COLOR] = colors;
+
+	Ref<ArrayMesh> mesh;
+	mesh.instantiate();
+	mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+	return mesh;
+}
+
+Ref<ArrayMesh> VoxelEditorNative::procedural_preview_mesh(
+		int shape_id,
+		const Vector3i &origin, const Vector3i &region_size,
+		const Color &color) {
+
+	if (shape_id < 0 || shape_id >= SHAPE_COUNT) {
+		return Ref<ArrayMesh>();
+	}
+
+	int sx = region_size.x, sy = region_size.y, sz = region_size.z;
+	if (sx <= 0 || sy <= 0 || sz <= 0) return Ref<ArrayMesh>();
+
+	int ox = origin.x, oy = origin.y, oz = origin.z;
+	double cx = ox + sx * 0.5;
+	double cy = oy + sy * 0.5;
+	double cz = oz + sz * 0.5;
+
+	int vol = sx * sy * sz;
+	std::vector<bool> filled(vol, false);
+
+	for (int lz = 0; lz < sz; lz++) {
+		for (int ly = 0; ly < sy; ly++) {
+			for (int lx = 0; lx < sx; lx++) {
+				int wx = ox + lx, wy = oy + ly, wz = oz + lz;
+				if (_eval_shape(shape_id, wx, wy, wz, ox, oy, oz, sx, sy, sz, cx, cy, cz)) {
+					filled[lx + ly * sx + lz * sx * sy] = true;
+				}
+			}
+		}
+	}
+
+	return _build_surface_mesh(filled, origin, region_size, color);
+}
+
+Dictionary VoxelEditorNative::procedural_execute(
+		int shape_id,
+		const PackedByteArray &voxel_data,
+		const Vector3i &origin, const Vector3i &region_size,
+		int vid,
+		int tile_x, int tile_y, int tile_z) {
+
+	Dictionary result;
+	if (shape_id < 0 || shape_id >= SHAPE_COUNT) return result;
+
+	const uint8_t *data = voxel_data.ptr();
+	int data_size = voxel_data.size();
+
+	int sx = region_size.x, sy = region_size.y, sz = region_size.z;
+	int ox = origin.x, oy = origin.y, oz = origin.z;
+	double cx = ox + sx * 0.5;
+	double cy = oy + sy * 0.5;
+	double cz = oz + sz * 0.5;
+
+	int place_id = (shape_id == SHAPE_CLEAR) ? 0 : vid;
+
+	for (int lz = 0; lz < sz; lz++) {
+		for (int ly = 0; ly < sy; ly++) {
+			for (int lx = 0; lx < sx; lx++) {
+				int wx = ox + lx, wy = oy + ly, wz = oz + lz;
+				if (!_in_bounds(wx, wy, wz, tile_x, tile_y, tile_z)) continue;
+
+				if (_eval_shape(shape_id, wx, wy, wz, ox, oy, oz, sx, sy, sz, cx, cy, cz)) {
+					uint16_t current = _get_voxel(data, data_size, wx, wy, wz, tile_x, tile_y, tile_z);
+					if ((int)current != place_id) {
+						result[Vector3i(wx, wy, wz)] = place_id;
+					}
+				}
+			}
 		}
 	}
 

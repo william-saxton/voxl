@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <unordered_set>
 
 namespace godot {
 
@@ -25,6 +26,24 @@ public:
 	static constexpr int DEFAULT_TILE_Y = 112;
 	static constexpr int DEFAULT_TILE_Z = 128;
 	static constexpr int CHUNK_SIZE = 16;
+
+	// Procedural shape preset IDs (must match GDScript ProceduralTool.PRESETS order)
+	enum ProceduralShape {
+		SHAPE_SPHERE = 0,
+		SHAPE_HOLLOW_SPHERE,
+		SHAPE_CYLINDER_Y,
+		SHAPE_TORUS_Y,
+		SHAPE_ARCH_Z,
+		SHAPE_DOME,
+		SHAPE_NOISE_TERRAIN,
+		SHAPE_PYRAMID,
+		SHAPE_CONE_Y,
+		SHAPE_STAIRS_Z,
+		SHAPE_SPIRAL_Y,
+		SHAPE_CHECKERBOARD,
+		SHAPE_CLEAR,
+		SHAPE_COUNT,
+	};
 
 	VoxelEditorNative();
 	~VoxelEditorNative();
@@ -65,6 +84,54 @@ public:
 			const PackedByteArray &voxel_data,
 			const Vector3i &start, const Vector3i &face_dir,
 			int criteria, int range, int max_voxels,
+			int tile_x = DEFAULT_TILE_X, int tile_y = DEFAULT_TILE_Y, int tile_z = DEFAULT_TILE_Z);
+
+	// ── Bulk voxel writes ──
+	// Writes voxel changes to voxel_data and returns dirty chunk indices.
+	// changes: flat PackedInt32Array of [x, y, z, voxel_id, x, y, z, voxel_id, ...]
+	// Returns Dictionary {"voxel_data": PackedByteArray, "dirty_chunks": PackedInt32Array}
+	Dictionary bulk_set_voxels(
+			PackedByteArray voxel_data,
+			const PackedInt32Array &changes,
+			int tile_x, int tile_y, int tile_z);
+
+	// ── Mode-based shape apply (full pipeline in C++) ──
+	// Reads old voxel IDs, applies mode logic, writes new IDs, returns undo diffs.
+	// positions: flat [x, y, z, x, y, z, ...] (3 ints per position)
+	// voxel_ids: one target voxel ID per position
+	// mode: 0=ADD, 1=SUBTRACT, 2=PAINT
+	// Returns {"voxel_data", "dirty_chunks", "undo_diffs":[x,y,z,old,new,...]}
+	Dictionary apply_mode_changes(
+			PackedByteArray voxel_data,
+			const PackedInt32Array &positions,
+			const PackedInt32Array &voxel_ids,
+			int mode,
+			int tile_x, int tile_y, int tile_z);
+
+	// ── Apply packed undo diffs (for undo/redo) ──
+	// packed_diffs: [x, y, z, old_id, new_id, ...] (5 ints per entry)
+	// use_new_id: true = apply new_id (redo), false = apply old_id (undo)
+	// Returns {"voxel_data", "dirty_chunks"}
+	Dictionary apply_undo_diffs(
+			PackedByteArray voxel_data,
+			const PackedInt32Array &packed_diffs,
+			bool use_new_id,
+			int tile_x, int tile_y, int tile_z);
+
+	// ── Procedural shape preview ──
+	// Returns an ArrayMesh of the shape's outer surface for live preview.
+	Ref<ArrayMesh> procedural_preview_mesh(
+			int shape_id,
+			const Vector3i &origin, const Vector3i &region_size,
+			const Color &color);
+
+	// Returns a Dictionary { Vector3i -> int } of positions to place.
+	// vid = voxel ID to place. Reads existing voxels from voxel_data.
+	Dictionary procedural_execute(
+			int shape_id,
+			const PackedByteArray &voxel_data,
+			const Vector3i &origin, const Vector3i &region_size,
+			int vid,
 			int tile_x = DEFAULT_TILE_X, int tile_y = DEFAULT_TILE_Y, int tile_z = DEFAULT_TILE_Z);
 
 protected:
@@ -116,6 +183,29 @@ private:
 		{1, 0, 0}, {-1, 0, 0},
 		{0, 1, 0}, {0, -1, 0},
 		{0, 0, 1}, {0, 0, -1},
+	};
+
+	// Procedural shape evaluation — returns true if voxel should be filled
+	static bool _eval_shape(int shape_id,
+			int x, int y, int z,
+			int ox, int oy, int oz,
+			int sx, int sy, int sz,
+			double cx, double cy, double cz);
+
+	// Build surface mesh from a filled-voxel set
+	static Ref<ArrayMesh> _build_surface_mesh(
+			const std::vector<bool> &filled,
+			const Vector3i &origin, const Vector3i &region_size,
+			const Color &color);
+
+	// Hash for Vector3i used in unordered containers
+	struct Vec3iHash {
+		size_t operator()(const Vector3i &v) const {
+			size_t h = std::hash<int>()(v.x);
+			h ^= std::hash<int>()(v.y) + 0x9e3779b9 + (h << 6) + (h >> 2);
+			h ^= std::hash<int>()(v.z) + 0x9e3779b9 + (h << 6) + (h >> 2);
+			return h;
+		}
 	};
 };
 

@@ -169,6 +169,65 @@ func update_box_wireframe(min_pos: Vector3i, max_pos: Vector3i) -> void:
 	visible = true
 
 
+## Show the outer surface of an arbitrary set of voxel positions as translucent faces.
+## Only draws faces where a neighbor voxel is absent — much lighter than per-voxel cubes.
+func update_surface(positions: Array[Vector3i]) -> void:
+	multimesh.instance_count = 0
+	_wire_active = true
+
+	if positions.is_empty():
+		visible = false
+		_wire_instance.visible = false
+		_wire_instance.mesh = null
+		_fill_instance.visible = false
+		_fill_instance.mesh = null
+		return
+
+	# Build set for O(1) neighbor lookup
+	var pos_set := {}
+	for p in positions:
+		pos_set[p] = true
+
+	# 6 face directions and their 4 corner offsets (wound CCW from outside)
+	var face_defs: Array[Array] = [
+		[Vector3i( 1, 0, 0), Vector3(1,0,0), Vector3(1,0,1), Vector3(1,1,1), Vector3(1,1,0)],
+		[Vector3i(-1, 0, 0), Vector3(0,0,1), Vector3(0,0,0), Vector3(0,1,0), Vector3(0,1,1)],
+		[Vector3i( 0, 1, 0), Vector3(0,1,0), Vector3(1,1,0), Vector3(1,1,1), Vector3(0,1,1)],
+		[Vector3i( 0,-1, 0), Vector3(0,0,1), Vector3(1,0,1), Vector3(1,0,0), Vector3(0,0,0)],
+		[Vector3i( 0, 0, 1), Vector3(0,0,1), Vector3(0,1,1), Vector3(1,1,1), Vector3(1,0,1)],
+		[Vector3i( 0, 0,-1), Vector3(1,0,0), Vector3(1,1,0), Vector3(0,1,0), Vector3(0,0,0)],
+	]
+
+	var fill_mesh := ImmediateMesh.new()
+	fill_mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	fill_mesh.surface_set_color(_fill_material.albedo_color)
+
+	for p in positions:
+		var pf := Vector3(p)
+		for fd in face_defs:
+			var dir: Vector3i = fd[0]
+			if not pos_set.has(p + dir):
+				var c0: Vector3 = pf + fd[1]
+				var c1: Vector3 = pf + fd[2]
+				var c2: Vector3 = pf + fd[3]
+				var c3: Vector3 = pf + fd[4]
+				fill_mesh.surface_add_vertex(c0)
+				fill_mesh.surface_add_vertex(c1)
+				fill_mesh.surface_add_vertex(c2)
+				fill_mesh.surface_add_vertex(c0)
+				fill_mesh.surface_add_vertex(c2)
+				fill_mesh.surface_add_vertex(c3)
+
+	fill_mesh.surface_end()
+	fill_mesh.surface_set_material(0, _fill_material)
+	_fill_instance.mesh = fill_mesh
+	_fill_instance.visible = true
+
+	_wire_instance.mesh = null
+	_wire_instance.visible = false
+	visible = true
+
+
 func clear() -> void:
 	visible = false
 	_wire_active = false
