@@ -11,6 +11,7 @@ uniform float star_twinkle_speed : hint_range(0.5, 5.0) = 2.0;
 uniform float scroll_speed : hint_range(0.0, 0.5) = 0.05;
 uniform float nebula_intensity : hint_range(0.0, 1.0) = 0.4;
 uniform float distortion_strength : hint_range(0.0, 0.15) = 0.04;
+uniform float uv_scale : hint_range(0.1, 10.0) = 1.0;
 
 varying vec3 world_pos;
 
@@ -108,7 +109,7 @@ void fragment() {
 	float time = TIME;
 
 	// World-space UVs — seamless across all portal voxel faces
-	vec2 wuv = get_world_uv(world_pos, NORMAL);
+	vec2 wuv = get_world_uv(world_pos, NORMAL) * uv_scale;
 
 	// Slight animated distortion at the edges of reality
 	vec2 distorted = wuv + vec2(

@@ -31,9 +31,9 @@ const PRESETS := {
 		"code": "var R = min(sx, sz) * 0.35\nvar r = min(sx, sz) * 0.15\nvar ring = sqrt((x-cx)*(x-cx) + (z-cz)*(z-cz))\nvar d = sqrt((ring - R)*(ring - R) + (y-cy)*(y-cy))\nreturn vid if d <= r else -1",
 		"description": "Torus ring — major radius 35%, minor radius 15% of region",
 	},
-	"Arch (Z)": {
-		"code": "var R = min(sx, sy) * 0.4\nvar r = min(sx, sy) * 0.12\nvar arch_x = x - cx\nvar arch_y = y - float(oy)\nvar ring = sqrt(arch_x*arch_x + arch_y*arch_y)\nvar d = sqrt((ring - R)*(ring - R) + (z-cz)*(z-cz))\nreturn vid if d <= r and arch_y >= 0 else -1",
-		"description": "Half-torus arch spanning Z, sitting on the floor of the region",
+	"Arch": {
+		"code": "var ah: float\nvar av: float = y - float(oy)\nvar dep: float\nvar sd: int\nvar sh: int\nvar sv: int\nif sx >= sz:\n\tah = x - cx\n\tdep = z - cz\n\tsd = sz\n\tsh = sx\n\tsv = sy\nelse:\n\tah = z - cz\n\tdep = x - cx\n\tsd = sx\n\tsh = sz\n\tsv = sy\nvar R = min(sh, sv) * 0.4\nvar r = max(min(sh, min(sv, sd)) * 0.2, 2.0)\nvar ring = sqrt(ah*ah + av*av)\nvar d = sqrt((ring - R)*(ring - R) + dep*dep)\nreturn vid if d <= r and av >= 0 else -1",
+		"description": "Half-torus arch — tube bent over two pillars, spans the longer horizontal axis",
 	},
 	"Dome": {
 		"code": "var r = min(sx, min(sy*2, sz)) * 0.5\nvar d = sqrt((x-cx)*(x-cx) + (y-float(oy))*(y-float(oy)) + (z-cz)*(z-cz))\nreturn vid if d <= r and y >= oy else -1",

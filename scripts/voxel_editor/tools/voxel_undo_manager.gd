@@ -18,6 +18,9 @@ var _redo_stack: Array[Dictionary] = []
 ## Called after undo/redo to restore selection. Set by EditorToolManager.
 var on_selection_restore: Callable
 
+## Called after undo/redo of metadata changes. Set by EditorToolManager.
+var on_metadata_restore: Callable
+
 ## Native accelerator for bulk voxel writes
 var _native: RefCounted
 
@@ -112,12 +115,32 @@ func apply_mode_native(positions_flat: PackedInt32Array, voxel_ids: PackedInt32A
 	return true
 
 
+## Push a metadata-only undo action.
+## changes: Array of { "pos": Vector3i, "old_data": Variant, "new_data": Variant }
+## old_data/new_data are Dictionary (the full metadata entry) or null (didn't exist / deleted).
+func push_metadata_action(changes: Array, description: String) -> void:
+	if changes.is_empty():
+		return
+	var action := {
+		"metadata_changes": changes,
+		"description": description,
+		"selection_before": null,
+		"selection_after": null,
+	}
+	_undo_stack.push_back(action)
+	_redo_stack.clear()
+	while _undo_stack.size() > MAX_ACTIONS:
+		_undo_stack.pop_front()
+
+
 ## Undo the most recent action.
 func undo(tile: WFCTileDef, renderer: TileRenderer) -> bool:
 	if _undo_stack.is_empty():
 		return false
 	var action: Dictionary = _undo_stack.pop_back()
-	if action.has("packed_diffs"):
+	if action.has("metadata_changes"):
+		_apply_metadata_changes(action.metadata_changes, false, tile)
+	elif action.has("packed_diffs"):
 		_bulk_apply_packed(action.packed_diffs, false, tile, renderer)
 	else:
 		_bulk_apply(action.diffs, false, tile, renderer)
@@ -132,7 +155,9 @@ func redo(tile: WFCTileDef, renderer: TileRenderer) -> bool:
 	if _redo_stack.is_empty():
 		return false
 	var action: Dictionary = _redo_stack.pop_back()
-	if action.has("packed_diffs"):
+	if action.has("metadata_changes"):
+		_apply_metadata_changes(action.metadata_changes, true, tile)
+	elif action.has("packed_diffs"):
 		_bulk_apply_packed(action.packed_diffs, true, tile, renderer)
 	else:
 		_bulk_apply(action.diffs, true, tile, renderer)
@@ -229,3 +254,16 @@ func get_redo_description() -> String:
 	if _redo_stack.is_empty():
 		return ""
 	return _redo_stack.back().description
+
+
+## Apply metadata changes for undo (use_new=false) or redo (use_new=true).
+func _apply_metadata_changes(changes: Array, use_new: bool, tile: WFCTileDef) -> void:
+	for change in changes:
+		var pos: Vector3i = change["pos"]
+		var data: Variant = change["new_data"] if use_new else change["old_data"]
+		if data == null:
+			tile.metadata_points.erase(pos)
+		else:
+			tile.metadata_points[pos] = data
+	if on_metadata_restore.is_valid():
+		on_metadata_restore.call()

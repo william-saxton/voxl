@@ -50,6 +50,12 @@ void VoxelEditorNative::_bind_methods() {
 			&VoxelEditorNative::apply_undo_diffs);
 	ClassDB::bind_method(D_METHOD("procedural_preview_mesh", "shape_id", "origin", "region_size", "color"),
 			&VoxelEditorNative::procedural_preview_mesh);
+	ClassDB::bind_method(D_METHOD("arch_preview_mesh", "point_a", "point_b", "thickness", "color"),
+			&VoxelEditorNative::arch_preview_mesh);
+	ClassDB::bind_method(D_METHOD("arch_execute", "point_a", "point_b", "thickness",
+			"voxel_data", "vid", "tile_x", "tile_y", "tile_z"),
+			&VoxelEditorNative::arch_execute,
+			DEFVAL(DEFAULT_TILE_X), DEFVAL(DEFAULT_TILE_Y), DEFVAL(DEFAULT_TILE_Z));
 	ClassDB::bind_method(D_METHOD("procedural_execute", "shape_id", "voxel_data", "origin", "region_size", "vid",
 			"tile_x", "tile_y", "tile_z"),
 			&VoxelEditorNative::procedural_execute,
@@ -917,13 +923,29 @@ bool VoxelEditorNative::_eval_shape(int shape_id,
 			return d <= r;
 		}
 		case SHAPE_ARCH_Z: {
-			double R = std::min(sx, sy) * 0.4;
-			double r = std::min(sx, sy) * 0.12;
-			double arch_x = x - cx;
-			double arch_y = y - (double)oy;
-			double ring = std::sqrt(arch_x*arch_x + arch_y*arch_y);
-			double d = std::sqrt((ring - R)*(ring - R) + (z - cz)*(z - cz));
-			return d <= r && arch_y >= 0;
+			// Half-torus arch: tube bent in a semicircle, like two pillars
+			// connected by a curved tube overhead.
+			// Arch spans the longer horizontal axis, depth along the shorter.
+			double arch_h, arch_v, depth;
+			int span_dim, height_dim, depth_dim;
+			if (sx >= sz) {
+				// Arch spans X, depth along Z
+				arch_h = x - cx;
+				arch_v = y - (double)oy;
+				depth = z - cz;
+				span_dim = sx; height_dim = sy; depth_dim = sz;
+			} else {
+				// Arch spans Z, depth along X
+				arch_h = z - cz;
+				arch_v = y - (double)oy;
+				depth = x - cx;
+				span_dim = sz; height_dim = sy; depth_dim = sx;
+			}
+			double R = std::min(span_dim, height_dim) * 0.4;
+			double r = std::max(std::min({span_dim, height_dim, depth_dim}) * 0.2, 2.0);
+			double ring = std::sqrt(arch_h * arch_h + arch_v * arch_v);
+			double d = std::sqrt((ring - R) * (ring - R) + depth * depth);
+			return d <= r && arch_v >= 0;
 		}
 		case SHAPE_DOME: {
 			double r = std::min({sx, sy * 2, sz}) * 0.5;
@@ -1128,6 +1150,147 @@ Dictionary VoxelEditorNative::procedural_execute(
 					if ((int)current != place_id) {
 						result[Vector3i(wx, wy, wz)] = place_id;
 					}
+				}
+			}
+		}
+	}
+
+	return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Arch Tool — 3-click half-torus with explicit parameters
+// ═══════════════════════════════════════════════════════════════════════════
+
+bool VoxelEditorNative::_eval_arch(int x, int y, int z,
+		const Vector3i &a, const Vector3i &b, double r) {
+	// Horizontal direction from A to B (in XZ plane)
+	double dx = b.x - a.x;
+	double dz = b.z - a.z;
+	double len = std::sqrt(dx * dx + dz * dz);
+	if (len < 0.5) {
+		// A and B are at the same XZ position — vertical arch, use XZ plane
+		// Fall back to Y-difference for the arch span
+		double dy = b.y - a.y;
+		len = std::abs(dy);
+		if (len < 0.5) return false;
+		double R = len * 0.5;
+		double my = (a.y + b.y) * 0.5;
+		double mx = a.x;
+		double mz = a.z;
+		double h = y - my;
+		// Pick a horizontal axis for "up" (use X)
+		double v = x - mx;
+		double depth = z - mz;
+		double ring = std::sqrt(h * h + v * v);
+		double d = std::sqrt((ring - R) * (ring - R) + depth * depth);
+		return d <= r;
+	}
+
+	double dir_x = dx / len;
+	double dir_z = dz / len;
+
+	// Midpoint and base Y
+	double mx = (a.x + b.x) * 0.5;
+	double mz = (a.z + b.z) * 0.5;
+	double base_y = std::min(a.y, b.y);
+	double R = len * 0.5;
+
+	// Project voxel position
+	double rel_x = x - mx;
+	double rel_z = z - mz;
+	double h = rel_x * dir_x + rel_z * dir_z;     // along A→B direction
+	double v = y - base_y;                          // vertical (upward)
+	double depth = -rel_x * dir_z + rel_z * dir_x; // perpendicular to A→B in XZ
+
+	double ring = std::sqrt(h * h + v * v);
+	double d = std::sqrt((ring - R) * (ring - R) + depth * depth);
+	return d <= r && v >= 0;
+}
+
+
+Ref<ArrayMesh> VoxelEditorNative::arch_preview_mesh(
+		const Vector3i &point_a, const Vector3i &point_b,
+		double thickness, const Color &color) {
+
+	// Compute bounding box
+	double dx = point_b.x - point_a.x;
+	double dz = point_b.z - point_a.z;
+	double len = std::sqrt(dx * dx + dz * dz);
+	double R = len * 0.5;
+	double pad = R + thickness + 2;
+	int base_y = std::min(point_a.y, point_b.y);
+
+	int mx = (point_a.x + point_b.x) / 2;
+	int mz = (point_a.z + point_b.z) / 2;
+
+	int min_x = (int)std::floor(mx - pad);
+	int max_x = (int)std::ceil(mx + pad);
+	int min_y = base_y;
+	int max_y = (int)std::ceil(base_y + R + thickness + 2);
+	int min_z = (int)std::floor(mz - pad);
+	int max_z = (int)std::ceil(mz + pad);
+
+	int sx = max_x - min_x + 1;
+	int sy = max_y - min_y + 1;
+	int sz = max_z - min_z + 1;
+
+	// Build filled volume
+	std::vector<bool> filled(sx * sy * sz, false);
+	for (int lz = 0; lz < sz; lz++) {
+		for (int ly = 0; ly < sy; ly++) {
+			for (int lx = 0; lx < sx; lx++) {
+				if (_eval_arch(min_x + lx, min_y + ly, min_z + lz,
+						point_a, point_b, thickness)) {
+					filled[lx + ly * sx + lz * sx * sy] = true;
+				}
+			}
+		}
+	}
+
+	Vector3i origin(min_x, min_y, min_z);
+	Vector3i region(sx, sy, sz);
+	return _build_surface_mesh(filled, origin, region, color);
+}
+
+
+Dictionary VoxelEditorNative::arch_execute(
+		const Vector3i &point_a, const Vector3i &point_b,
+		double thickness,
+		const PackedByteArray &voxel_data, int vid,
+		int tile_x, int tile_y, int tile_z) {
+
+	Dictionary result;
+
+	double dx = point_b.x - point_a.x;
+	double dz = point_b.z - point_a.z;
+	double len = std::sqrt(dx * dx + dz * dz);
+	double R = len * 0.5;
+	double pad = R + thickness + 2;
+	int base_y = std::min(point_a.y, point_b.y);
+
+	int mx = (point_a.x + point_b.x) / 2;
+	int mz = (point_a.z + point_b.z) / 2;
+
+	int min_x = std::max(0, (int)std::floor(mx - pad));
+	int max_x = std::min(tile_x - 1, (int)std::ceil(mx + pad));
+	int min_y = std::max(0, base_y);
+	int max_y = std::min(tile_y - 1, (int)std::ceil(base_y + R + thickness + 2));
+	int min_z = std::max(0, (int)std::floor(mz - pad));
+	int max_z = std::min(tile_z - 1, (int)std::ceil(mz + pad));
+
+	int data_size = voxel_data.size();
+	const uint8_t *data = voxel_data.ptr();
+
+	for (int z = min_z; z <= max_z; z++) {
+		for (int y = min_y; y <= max_y; y++) {
+			for (int x = min_x; x <= max_x; x++) {
+				if (!_eval_arch(x, y, z, point_a, point_b, thickness))
+					continue;
+				uint16_t old_id = _get_voxel(data, data_size, x, y, z,
+						tile_x, tile_y, tile_z);
+				if ((int)old_id != vid) {
+					result[Vector3i(x, y, z)] = vid;
 				}
 			}
 		}

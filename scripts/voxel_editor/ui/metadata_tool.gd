@@ -40,6 +40,8 @@ func _init() -> void:
 	register_type("waypoint", "Navigation", Color(0.5, 1.0, 1.0))
 	register_type("particle", "Particles", Color(1.0, 0.5, 1.0),
 		{ "scene": "", "auto_start": true, "one_shot": false })
+	register_type("shader_plane", "Shaders", Color(0.3, 0.9, 1.0),
+		{ "shader_path": "", "offset": 0.05, "inset": 0.1, "double_sided": true })
 	register_type("custom", "Other", Color(0.7, 0.7, 0.7))
 
 

@@ -39,6 +39,11 @@ var current_tool_type: ToolType = ToolType.SHAPE:
 			transform_tool.cancel()
 			if _transform_gizmo:
 				_transform_gizmo.clear_rotate_feedback()
+		# Reset arch state when switching tools
+		if _arch_state > 0:
+			_arch_state = 0
+			if _proc_preview_instance:
+				_proc_preview_instance.visible = false
 		current_tool_type = value
 		# Procedural tool always uses box shape and ADD mode for region definition
 		if value == ToolType.PROCEDURAL:
@@ -92,6 +97,12 @@ var _proc_native: RefCounted  ## VoxelEditorNative for C++ shape preview
 ## Maps preset name → C++ shape ID. Must match ProceduralShape enum order in C++.
 var _proc_shape_ids: Dictionary = {}
 var _proc_preview_instance: MeshInstance3D  ## Dedicated mesh instance for procedural preview
+
+## Arch tool — 3-click half-torus placement
+var _arch_state: int = 0  ## 0=idle, 1=first point placed, 2=second point placed
+var _arch_point_a := Vector3i.ZERO
+var _arch_point_b := Vector3i.ZERO
+var _arch_thickness: float = 3.0
 
 ## Hollow toggle for box/circle/polygon shapes
 var hollow := false
@@ -197,6 +208,8 @@ func initialize(editor_main: VoxelEditorMain, viewport: SubViewport,
 	selection.selection_changed.connect(func(): _on_selection_changed())
 	undo_manager.on_selection_restore = func(positions: Array):
 		selection.set_positions(positions)
+	undo_manager.on_metadata_restore = func():
+		refresh_metadata_markers()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -424,15 +437,27 @@ func _update_hover() -> void:
 		_update_mirror_place_preview(ray_origin, ray_dir, tile)
 		return
 
-	# Metadata mode — highlight clicked voxel
+	# Metadata mode — highlight voxel, show metadata info on hover
 	if current_tool_type == ToolType.METADATA:
 		var meta_result := VoxelRaycast.cast(tile, ray_origin, ray_dir)
 		if _highlight:
 			if meta_result.hit:
 				_highlight.visible = true
 				_highlight.set_voxel_pos(meta_result.position)
+				# Check if this voxel has metadata — highlight differently
+				var has_meta := tile.metadata_points.has(meta_result.position)
+				if has_meta:
+					var meta_data: Dictionary = tile.metadata_points[meta_result.position]
+					var meta_type: String = meta_data.get("type", "unknown")
+					_highlight.set_mode_color(2, Color(0.3, 0.9, 1.0))  # Cyan for metadata
+					_editor_main._update_status("[%s] Click to edit, Right-click to delete" % meta_type)
+					_metadata_renderer.highlight_marker(meta_result.position)
+				else:
+					_highlight.set_mode_color(2, Color(0.3, 1.0, 0.3))  # Green for placement
+					_metadata_renderer.highlight_marker(Vector3i(-9999, -9999, -9999))
 			else:
 				_highlight.visible = false
+				_metadata_renderer.highlight_marker(Vector3i(-9999, -9999, -9999))
 		if _shape_preview:
 			_shape_preview.clear()
 		return
@@ -453,6 +478,13 @@ func _update_hover() -> void:
 
 	# Extrude active — preview is updated via handle_viewport_drag, just hide highlight
 	if extrude_tool.active:
+		if _highlight:
+			_highlight.visible = false
+		return
+
+	# Arch tool — update preview during 3-click placement
+	if _arch_state > 0:
+		_update_arch_hover(ray_origin, ray_dir, tile)
 		if _highlight:
 			_highlight.visible = false
 		return
@@ -643,6 +675,11 @@ func handle_viewport_click(event: InputEventMouseButton) -> void:
 			_handle_extrude_click(tile, palette, ray_origin, ray_dir, event.position.y)
 			return
 
+		# Arch tool — 3-click half-torus
+		if _is_arch_mode():
+			_handle_arch_click(tile, palette, ray_origin, ray_dir)
+			return
+
 		# If shape is active, this is the next click — commit or advance phase
 		if current_shape.active:
 			# Apply numeric constraint before committing
@@ -753,6 +790,14 @@ func handle_viewport_click(event: InputEventMouseButton) -> void:
 		# Right-click during active extrude = cancel
 		if extrude_tool.active:
 			extrude_tool.cancel()
+			if _shape_preview:
+				_shape_preview.clear()
+			return
+		# Right-click during arch placement = cancel
+		if _arch_state > 0:
+			_arch_state = 0
+			if _proc_preview_instance:
+				_proc_preview_instance.visible = false
 			if _shape_preview:
 				_shape_preview.clear()
 			return
@@ -1368,6 +1413,11 @@ func set_procedural_preset(preset_name: String) -> void:
 	procedural_preset = preset_name
 	if ProceduralTool.PRESETS.has(preset_name):
 		procedural_code = ProceduralTool.PRESETS[preset_name]["code"]
+	# Reset arch state when switching preset
+	if _arch_state > 0:
+		_arch_state = 0
+		if _proc_preview_instance:
+			_proc_preview_instance.visible = false
 	procedural_preset_changed.emit(preset_name)
 
 
@@ -1516,6 +1566,170 @@ func _apply_procedural(tile: WFCTileDef, box: BoxShape) -> void:
 		var renderer := _editor_main.get_tile_renderer()
 		undo_manager.apply_and_commit(action, tile, renderer)
 	_editor_main._update_status("Shader: %d voxels generated" % changes.size())
+
+
+## Check if we're in arch placement mode.
+func _is_arch_mode() -> bool:
+	return current_tool_type == ToolType.PROCEDURAL and procedural_preset == "Arch"
+
+
+## Handle clicks for the 3-click arch tool.
+func _handle_arch_click(tile: WFCTileDef, palette: VoxelPalette,
+		ray_origin: Vector3, ray_dir: Vector3) -> void:
+	var result := VoxelRaycast.cast(tile, ray_origin, ray_dir)
+	if not result.hit:
+		var ground := _raycast_ground(ray_origin, ray_dir)
+		if ground.x < 0:
+			return
+		# Use ground hit as placement point
+		match _arch_state:
+			0:
+				_arch_point_a = ground
+				_arch_state = 1
+				_editor_main._update_status("Arch: click second pillar center")
+			1:
+				_arch_point_b = ground
+				_arch_state = 2
+				_editor_main._update_status("Arch: click to set thickness")
+		return
+
+	match _arch_state:
+		0:
+			# First click — place first pillar center
+			_arch_point_a = result.previous
+			_arch_state = 1
+			_editor_main._update_status("Arch: click second pillar center")
+		1:
+			# Second click — place second pillar center
+			_arch_point_b = result.previous
+			_arch_state = 2
+			_editor_main._update_status("Arch: click to set thickness")
+		2:
+			# Third click — commit with current thickness
+			_commit_arch(tile, palette)
+
+
+## Update arch preview during hover.
+func _update_arch_hover(ray_origin: Vector3, ray_dir: Vector3, tile: WFCTileDef) -> void:
+	var result := VoxelRaycast.cast(tile, ray_origin, ray_dir)
+	var hover_pos: Vector3
+
+	if result.hit:
+		hover_pos = Vector3(result.previous) + Vector3(0.5, 0.5, 0.5)
+	else:
+		var ground := _raycast_ground(ray_origin, ray_dir)
+		if ground.x >= 0:
+			hover_pos = Vector3(ground) + Vector3(0.5, 0.5, 0.5)
+		else:
+			return
+
+	if _arch_state == 1:
+		# Show line from A to cursor
+		var hover_vi := Vector3i(hover_pos)
+		if _shape_preview:
+			_shape_preview.set_preview_color(PrimaryMode.ADD)
+			_shape_preview.update_positions([_arch_point_a, hover_vi])
+
+	elif _arch_state == 2:
+		# Compute thickness from cursor distance to arch ring centerline
+		_arch_thickness = _compute_arch_thickness(hover_pos)
+		_arch_thickness = maxf(_arch_thickness, 1.0)
+
+		# Show arch preview
+		if _proc_native:
+			var color := Color(0.3, 0.7, 1.0, 0.3)
+			var mesh: ArrayMesh = _proc_native.arch_preview_mesh(
+				_arch_point_a, _arch_point_b, _arch_thickness, color)
+			if _shape_preview:
+				_shape_preview.clear()
+			if mesh:
+				if _proc_preview_instance.get_surface_override_material_count() == 0 or not _proc_preview_instance.mesh:
+					var mat := StandardMaterial3D.new()
+					mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+					mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+					mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+					mat.no_depth_test = true
+					mat.vertex_color_use_as_albedo = true
+					_proc_preview_instance.material_override = mat
+				_proc_preview_instance.mesh = mesh
+				_proc_preview_instance.visible = true
+			else:
+				_proc_preview_instance.visible = false
+			_editor_main._update_status("Arch thickness: %.1f" % _arch_thickness)
+
+
+## Compute arch tube thickness from cursor position.
+## Distance from cursor to the nearest point on the torus ring centerline.
+func _compute_arch_thickness(cursor: Vector3) -> float:
+	var a := Vector3(_arch_point_a)
+	var b := Vector3(_arch_point_b)
+	var mid := (a + b) * 0.5
+	var dx := b.x - a.x
+	var dz := b.z - a.z
+	var len := sqrt(dx * dx + dz * dz)
+	if len < 0.5:
+		return 3.0
+	var R := len * 0.5
+	var base_y: float = minf(a.y, b.y)
+	var dir_x := dx / len
+	var dir_z := dz / len
+
+	var rel_x := cursor.x - mid.x
+	var rel_z := cursor.z - mid.z
+	var h := rel_x * dir_x + rel_z * dir_z
+	var v := cursor.y - base_y
+	var depth := -rel_x * dir_z + rel_z * dir_x
+
+	var ring := sqrt(h * h + v * v)
+	return sqrt((ring - R) * (ring - R) + depth * depth)
+
+
+## Commit the arch placement.
+func _commit_arch(tile: WFCTileDef, palette: VoxelPalette) -> void:
+	_arch_state = 0
+	if _proc_preview_instance:
+		_proc_preview_instance.visible = false
+	if _shape_preview:
+		_shape_preview.clear()
+
+	var vid: int = 1
+	if palette:
+		vid = palette.get_voxel_id(selected_palette_index)
+
+	if _proc_native:
+		var changes: Dictionary = _proc_native.arch_execute(
+			_arch_point_a, _arch_point_b, _arch_thickness,
+			tile.voxel_data, vid,
+			tile.tile_size_x, tile.tile_size_y, tile.tile_size_z)
+		if changes.is_empty():
+			_editor_main._update_status("Arch: no voxels changed")
+			return
+
+		var description := "Arch (%d voxels)" % changes.size()
+		if undo_manager.has_native():
+			var count := changes.size()
+			var pos_flat := PackedInt32Array()
+			pos_flat.resize(count * 3)
+			var vid_flat := PackedInt32Array()
+			vid_flat.resize(count)
+			var i := 0
+			for pos: Vector3i in changes:
+				pos_flat[i * 3] = pos.x
+				pos_flat[i * 3 + 1] = pos.y
+				pos_flat[i * 3 + 2] = pos.z
+				vid_flat[i] = changes[pos]
+				i += 1
+			var renderer := _editor_main.get_tile_renderer()
+			undo_manager.apply_mode_native(pos_flat, vid_flat, 0, description,
+				tile, renderer)
+		else:
+			var action := undo_manager.create_action(description)
+			for pos: Vector3i in changes:
+				var old_id := tile.get_voxel(pos.x, pos.y, pos.z)
+				undo_manager.add_voxel_change(action, pos, old_id, changes[pos])
+			var renderer := _editor_main.get_tile_renderer()
+			undo_manager.apply_and_commit(action, tile, renderer)
+		_editor_main._update_status("Arch: %d voxels placed" % changes.size())
 
 
 func _sync_hollow() -> void:
@@ -1749,6 +1963,17 @@ func _handle_select_click(tile: WFCTileDef, ray_origin: Vector3,
 				selection.add_array(sym_positions_m)
 			else:
 				selection.set_positions(sym_positions_m)
+
+		SelectTool.SelectMode.OBJECT:
+			# Object select: flood fill all connected geometry
+			if not event.shift_pressed:
+				selection.clear()
+			var positions := select_tool.object_select(tile, result.position)
+			var sym_positions_o: Array[Vector3i] = _expand_with_symmetry(positions)
+			if event.shift_pressed:
+				selection.add_array(sym_positions_o)
+			else:
+				selection.set_positions(sym_positions_o)
 
 
 ## Update select tool preview during hover.
@@ -2077,8 +2302,25 @@ func _handle_metadata_click(tile: WFCTileDef, ray_origin: Vector3,
 	var result := VoxelRaycast.cast(tile, ray_origin, ray_dir)
 	if not result.hit:
 		return
-	# Click on existing voxel — place metadata at that position
 	var pos := result.position
+
+	# Shader plane: do surface flood-fill and open specialized dialog
+	if _editor_main.get_active_spawn_type() == "shader_plane":
+		var face_normal: Vector3i = result.previous - result.position
+		var surface := _surface_query.find_surface(tile, pos, face_normal)
+		if surface.is_empty():
+			surface = [pos]
+		# Pack positions into flat int array
+		var packed := PackedInt32Array()
+		packed.resize(surface.size() * 3)
+		for i in surface.size():
+			var p: Vector3i = surface[i]
+			packed[i * 3] = p.x
+			packed[i * 3 + 1] = p.y
+			packed[i * 3 + 2] = p.z
+		_editor_main.open_shader_plane_dialog(pos, packed, face_normal)
+		return
+
 	_editor_main.open_metadata_dialog(pos)
 
 

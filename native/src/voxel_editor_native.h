@@ -134,6 +134,19 @@ public:
 			int vid,
 			int tile_x = DEFAULT_TILE_X, int tile_y = DEFAULT_TILE_Y, int tile_z = DEFAULT_TILE_Z);
 
+	// ── Arch tool (3-click half-torus) ──
+	// point_a, point_b: base centers of the two arch legs
+	// thickness: tube radius of the torus
+	Ref<ArrayMesh> arch_preview_mesh(
+			const Vector3i &point_a, const Vector3i &point_b,
+			double thickness, const Color &color);
+
+	Dictionary arch_execute(
+			const Vector3i &point_a, const Vector3i &point_b,
+			double thickness,
+			const PackedByteArray &voxel_data, int vid,
+			int tile_x = DEFAULT_TILE_X, int tile_y = DEFAULT_TILE_Y, int tile_z = DEFAULT_TILE_Z);
+
 protected:
 	static void _bind_methods();
 
@@ -172,6 +185,10 @@ private:
 			int tile_x, int tile_y, int tile_z);
 
 	static Color _resolve_palette_color(const PackedColorArray &palette_colors, uint16_t voxel_id);
+
+	// Arch evaluation — returns true if voxel (x,y,z) is inside the half-torus
+	static bool _eval_arch(int x, int y, int z,
+			const Vector3i &a, const Vector3i &b, double r);
 
 	// Raycast internals
 	static float _ray_aabb_enter(const Vector3 &origin, const Vector3 &dir,

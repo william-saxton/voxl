@@ -541,13 +541,14 @@ func _update_sub_tools() -> void:
 	var tool_type := _tool_manager.current_tool_type
 
 	if tool_type == EditorToolManager.ToolType.SELECT:
-		# Select sub-tools: Face, Rectangle, Brush
-		var select_names := ["Face", "Rect", "Brush"]
-		var select_icons := ["voxel", "select_rect", "select_brush"]
+		# Select sub-tools: Face, Rectangle, Brush, Object
+		var select_names := ["Face", "Rect", "Brush", "Object"]
+		var select_icons := ["voxel", "select_rect", "select_brush", "select_object"]
 		var select_modes := [
 			SelectTool.SelectMode.MAGIC,
 			SelectTool.SelectMode.BOX,
-			SelectTool.SelectMode.BRUSH]
+			SelectTool.SelectMode.BRUSH,
+			SelectTool.SelectMode.OBJECT]
 		var select_group := ButtonGroup.new()
 
 		for i in select_names.size():
@@ -633,6 +634,10 @@ var _active_spawn_type: String = "spawn_point"
 
 func _set_active_spawn_type(type_name: String) -> void:
 	_active_spawn_type = type_name
+
+
+func get_active_spawn_type() -> String:
+	return _active_spawn_type
 
 
 func _make_sub_tool_button(text: String, shortcut: String, icon_name: String = "") -> Button:
@@ -893,11 +898,14 @@ func _update_context_bar_visibility() -> void:
 	# Select sub-tool context controls
 	var is_face_select := is_select and _tool_manager and \
 		_tool_manager.select_tool.mode == SelectTool.SelectMode.MAGIC
+	var is_object_select := is_select and _tool_manager and \
+		_tool_manager.select_tool.mode == SelectTool.SelectMode.OBJECT
 	var is_brush_select := is_select and _tool_manager and \
 		_tool_manager.select_tool.mode == SelectTool.SelectMode.BRUSH
-	_btn_geo.visible = is_face_select
-	_btn_mat.visible = is_face_select
-	_btn_col.visible = is_face_select
+	var show_query_filters := is_face_select or is_object_select
+	_btn_geo.visible = is_face_select  # Connectivity toggle only for Face mode
+	_btn_mat.visible = show_query_filters
+	_btn_col.visible = show_query_filters
 	_select_brush_size_label.visible = is_brush_select
 	_select_brush_size_spin.visible = is_brush_select
 
@@ -1620,13 +1628,23 @@ func _on_tags_changed(tags: PackedStringArray) -> void:
 
 func _on_metadata_confirmed(pos: Vector3i, type: String, properties: Dictionary) -> void:
 	if _tile:
+		var old_data: Variant = _metadata_tool.get_point(_tile, pos)
 		_metadata_tool.set_point(_tile, pos, type, properties)
+		var new_data: Variant = _metadata_tool.get_point(_tile, pos)
+		var desc := "Add %s" % type if old_data == null else "Edit %s" % type
+		_tool_manager.undo_manager.push_metadata_action(
+			[{ "pos": pos, "old_data": old_data, "new_data": new_data.duplicate() }], desc)
 		_update_status("Metadata set at (%d, %d, %d): %s" % [pos.x, pos.y, pos.z, type])
 
 
 func _on_metadata_deleted(pos: Vector3i) -> void:
 	if _tile:
+		var old_data: Variant = _metadata_tool.get_point(_tile, pos)
 		_metadata_tool.remove_point(_tile, pos)
+		if old_data != null:
+			_tool_manager.undo_manager.push_metadata_action(
+				[{ "pos": pos, "old_data": (old_data as Dictionary).duplicate(), "new_data": null }],
+				"Delete %s" % (old_data as Dictionary).get("type", "metadata"))
 		_update_status("Metadata removed at (%d, %d, %d)" % [pos.x, pos.y, pos.z])
 
 
@@ -1636,7 +1654,12 @@ func _on_metadata_changed_refresh() -> void:
 
 func remove_metadata_at(pos: Vector3i) -> void:
 	if _tile and _metadata_tool.has_point(_tile, pos):
+		var old_data: Variant = _metadata_tool.get_point(_tile, pos)
 		_metadata_tool.remove_point(_tile, pos)
+		if old_data != null:
+			_tool_manager.undo_manager.push_metadata_action(
+				[{ "pos": pos, "old_data": (old_data as Dictionary).duplicate(), "new_data": null }],
+				"Delete %s" % (old_data as Dictionary).get("type", "metadata"))
 		_update_status("Metadata removed at (%d, %d, %d)" % [pos.x, pos.y, pos.z])
 
 
@@ -1648,6 +1671,18 @@ func open_metadata_dialog(pos: Vector3i) -> void:
 		_metadata_dialog.open_edit(pos, existing as Dictionary)
 	else:
 		_metadata_dialog.open_new(pos, _active_spawn_type)
+
+
+func open_shader_plane_dialog(pos: Vector3i, surface_positions: PackedInt32Array,
+		face_normal: Vector3i) -> void:
+	if not _tile or not _metadata_dialog:
+		return
+	# If there's already a shader_plane at this position, edit it
+	var existing: Variant = _metadata_tool.get_point(_tile, pos)
+	if existing != null:
+		_metadata_dialog.open_edit(pos, existing as Dictionary)
+	else:
+		_metadata_dialog.open_new_shader_plane(pos, surface_positions, face_normal)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

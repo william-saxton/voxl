@@ -6,7 +6,7 @@ extends RefCounted
 ##   BRUSH: click-drag to paint selection voxel by voxel
 ##   MAGIC: click a voxel to flood-select all connected matching voxels
 
-enum SelectMode { BOX, BRUSH, MAGIC }
+enum SelectMode { BOX, BRUSH, MAGIC, OBJECT }
 
 var mode: SelectMode = SelectMode.BOX
 var query := VoxelQuery.new()
@@ -103,6 +103,18 @@ func magic_select(tile: WFCTileDef, start: Vector3i,
 	var old_conn := query.connectivity
 	query.connectivity = VoxelQuery.Connectivity.FACE
 	var result := query.flood_fill(tile, start, face_dir)
+	query.connectivity = old_conn
+	return result
+
+
+## Object select: flood fill all connected geometry from clicked voxel.
+## Always uses GEOMETRY connectivity (6-connected 3D BFS).
+## The query's filter_color / filter_material settings control whether
+## only matching color, material, or any non-air voxels are included.
+func object_select(tile: WFCTileDef, start: Vector3i) -> Array[Vector3i]:
+	var old_conn := query.connectivity
+	query.connectivity = VoxelQuery.Connectivity.GEOMETRY
+	var result := query.flood_fill(tile, start)
 	query.connectivity = old_conn
 	return result
 
