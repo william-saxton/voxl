@@ -43,10 +43,9 @@ This stores the credential in Docker's config and persists across pulls.
 
 ### 4. Deploy on TrueNAS
 
-1. In TrueNAS, go to **Apps > Discover Apps > Custom App**
-2. Paste the contents of `truenas-custom-app.yaml`
-3. Under **Environment Variables**, add:
-   - `GITHUB_TOKEN` = your PAT from step 2
+1. Copy `truenas-custom-app.yaml` and replace `<YOUR_GITHUB_PAT>` with your actual PAT
+2. In TrueNAS, go to **Apps > Discover Apps > Custom App**
+3. Paste the edited YAML
 4. Deploy the app
 
 ### 5. Authenticate Claude (one-time)

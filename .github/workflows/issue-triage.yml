@@ -2,12 +2,16 @@ name: Issue Triage & Auto-Fix
 
 on:
   issues:
-    types: [opened]
+    types: [opened, labeled]
 
 jobs:
   triage:
     name: Triage with Claude Code
     runs-on: [self-hosted, claude]
+    # Run on new issues, or when the 'claude-triage' label is added
+    if: >-
+      github.event.action == 'opened' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'claude-triage')
 
     steps:
       - uses: actions/checkout@v4
