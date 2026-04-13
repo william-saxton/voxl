@@ -18,16 +18,29 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Ensure Godot export templates
+      - name: Cache Godot export templates (Linux)
+        id: cache-templates-linux
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/godot/export_templates/4.6.stable
+          key: godot-templates-linux-4.6-stable
+
+      - name: Download Godot export templates
+        if: steps.cache-templates-linux.outputs.cache-hit != 'true'
         run: |
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.6.stable"
-          if [ ! -d "$TEMPLATE_DIR" ]; then
-            mkdir -p "$TEMPLATE_DIR"
-            wget -q https://github.com/godotengine/godot-builds/releases/download/4.6-stable/Godot_v4.6-stable_export_templates.tpz -O /tmp/templates.zip
-            unzip -q /tmp/templates.zip -d /tmp/templates-tmp
-            mv /tmp/templates-tmp/templates/* "$TEMPLATE_DIR/"
-            rm -rf /tmp/templates.zip /tmp/templates-tmp
-          fi
+          mkdir -p "$TEMPLATE_DIR"
+          wget -q https://github.com/godotengine/godot-builds/releases/download/4.6-stable/Godot_v4.6-stable_export_templates.tpz -O /tmp/templates.zip
+          unzip -q /tmp/templates.zip -d /tmp/templates-tmp
+          mv /tmp/templates-tmp/templates/* "$TEMPLATE_DIR/"
+          rm -rf /tmp/templates.zip /tmp/templates-tmp
+
+      - name: Cache SCons build (Linux)
+        uses: actions/cache@v4
+        with:
+          path: native/.sconsign.dblite
+          key: scons-linux-release-${{ hashFiles('native/src/**', 'native/SConstruct') }}
+          restore-keys: scons-linux-release-
 
       - name: Build native library (Linux release)
         run: |
@@ -49,7 +62,7 @@ jobs:
         run: |
           cd build
           chmod +x VOXL.x86_64
-          tar czf VOXL-linux-x86_64.tar.gz VOXL.x86_64 VOXL.pck
+          tar czf VOXL-linux-x86_64.tar.gz VOXL.*
 
       - uses: actions/upload-artifact@v4
         with:
@@ -72,6 +85,16 @@ jobs:
       - name: Install SCons
         run: pip install scons
 
+      - name: Cache SCons build (Windows)
+        uses: actions/cache@v4
+        with:
+          path: |
+            native/.sconsign.dblite
+            native/godot-cpp/**/*.obj
+            native/src/**/*.obj
+          key: scons-windows-release-${{ hashFiles('native/src/**', 'native/SConstruct') }}
+          restore-keys: scons-windows-release-
+
       - name: Build native library (Windows release)
         shell: bash
         run: |
@@ -84,7 +107,17 @@ jobs:
             throw "Native library not found"
           }
 
+      - name: Cache Godot + templates (Windows)
+        id: cache-godot-windows
+        uses: actions/cache@v4
+        with:
+          path: |
+            godot-bin
+            ~/AppData/Roaming/Godot/export_templates/4.6.stable
+          key: godot-windows-4.6-stable
+
       - name: Download Godot
+        if: steps.cache-godot-windows.outputs.cache-hit != 'true'
         run: |
           $version = "4.6-stable"
           Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/$version/Godot_v${version}_win64.exe.zip" -OutFile godot.zip
@@ -92,6 +125,7 @@ jobs:
           Move-Item "godot-bin/Godot_v${version}_win64.exe" "godot-bin/godot.exe"
 
       - name: Download Godot export templates
+        if: steps.cache-godot-windows.outputs.cache-hit != 'true'
         run: |
           $version = "4.6-stable"
           Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/$version/Godot_v${version}_export_templates.tpz" -OutFile templates.zip
@@ -109,7 +143,7 @@ jobs:
           godot-bin/godot.exe --headless --export-release "Windows Desktop" build/VOXL.exe
 
       - name: Package Windows build
-        run: Compress-Archive -Path build/VOXL.exe, build/VOXL.pck -DestinationPath build/VOXL-windows-x86_64.zip
+        run: Compress-Archive -Path (Get-ChildItem build/VOXL.*) -DestinationPath build/VOXL-windows-x86_64.zip
 
       - uses: actions/upload-artifact@v4
         with:
