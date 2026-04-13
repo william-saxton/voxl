@@ -4,6 +4,11 @@ on:
   issues:
     types: [opened, labeled]
 
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
 jobs:
   triage:
     name: Triage with Claude Code
@@ -27,7 +32,7 @@ jobs:
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
         run: |
-          claude -p --allowedTools 'Bash(git *)' 'Bash(cd native && scons *)' 'Bash(godot --headless *)' 'Bash(gh issue *)' 'Bash(gh pr *)' 'Bash(gh label *)' 'Bash(mkdir *)' 'Read' 'Edit' 'Write' 'Glob' 'Grep' <<'PROMPT'
+          claude -p --allowedTools 'Bash(git *)' 'Bash(cd native && scons *)' 'Bash(godot --headless *)' 'Bash(gh issue *)' 'Bash(gh pr *)' 'Bash(gh label *)' 'Bash(mkdir *)' 'Read' 'Edit' 'Write' 'Glob' 'Grep' <<PROMPT
           You are triaging a new GitHub issue for the VOXL project — a Godot 4.6 voxel
           terrain/physics simulation with a C++ GDExtension.
 
@@ -55,7 +60,7 @@ jobs:
              - Create a branch: `git checkout -b claude/fix-issue-${ISSUE_NUMBER}`
              - Implement the fix
              - Build the native library to verify:
-               `cd native && scons platform=linux target=template_debug -j$(nproc)`
+               \`cd native && scons platform=linux target=template_debug -j\$(nproc)\`
              - Run `godot --headless --import` to verify the project still imports cleanly
              - Commit, push, and create a PR with `gh pr create` linking `Fixes #${ISSUE_NUMBER}`
              - Comment on the issue explaining what you did
