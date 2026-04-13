@@ -420,6 +420,9 @@ func _create_cone(tip_pos: Vector3, direction: Vector3, color: Color) -> MeshIns
 	mi.mesh = cone
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
+	# Add to tree first so look_at() works (requires being inside the tree)
+	add_child(mi)
+
 	# Position cone so the tip is at tip_pos, pointing along direction
 	var base_pos := tip_pos - direction.normalized() * CONE_LENGTH * 0.5
 	mi.position = base_pos
@@ -430,7 +433,6 @@ func _create_cone(tip_pos: Vector3, direction: Vector3, color: Color) -> MeshIns
 	elif direction.y < 0:
 		mi.rotation_degrees = Vector3(180, 0, 0)
 
-	add_child(mi)
 	return mi
 
 

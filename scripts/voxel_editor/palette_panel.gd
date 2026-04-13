@@ -171,11 +171,16 @@ func _rebuild_list() -> void:
 		var header_row := HBoxContainer.new()
 		header_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
+		var mat_tooltip: String = mat_info.get("tooltip", "")
+
 		var group_label := Label.new()
 		group_label.text = "── %s ──" % mat_name
 		group_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		group_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		group_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+		if mat_tooltip != "":
+			group_label.tooltip_text = "%s: %s" % [mat_name, mat_tooltip]
+			group_label.mouse_filter = Control.MOUSE_FILTER_STOP
 		header_row.add_child(group_label)
 
 		var add_btn := Button.new()
@@ -224,8 +229,10 @@ func _rebuild_list() -> void:
 					_on_entry_clicked(captured_idx, event.ctrl_pressed)
 					btn.accept_event()
 			)
-			btn.tooltip_text = "%s (ID: %d, base: %s)" % [
-				entry.entry_name, idx, mat_name]
+			var entry_tip := "%s (ID: %d, base: %s)" % [entry.entry_name, idx, mat_name]
+			if mat_tooltip != "":
+				entry_tip += "\n%s" % mat_tooltip
+			btn.tooltip_text = entry_tip
 
 			_list.add_child(btn)
 			# Pad button array to match indices

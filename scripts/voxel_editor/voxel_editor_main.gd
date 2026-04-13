@@ -107,6 +107,11 @@ var _import_palette_dialog: FileDialog
 var _export_palette_dialog: FileDialog
 var _import_scene_dialog: FileDialog
 
+# ── Remote sync dialogs ──
+var _sync_config_dialog: SyncConfigDialog
+var _remote_browser: RemoteBrowserDialog
+var _remote_status_label: Label
+
 
 func _ready() -> void:
 	# Grab scene nodes
@@ -130,6 +135,7 @@ func _ready() -> void:
 	_setup_tile_properties()
 	_setup_metadata()
 	_setup_export()
+	_setup_remote()
 
 	new_tile()
 	_update_status("Ready")
@@ -336,6 +342,18 @@ func _setup_menu() -> void:
 	sel_menu.add_item("Erode", 63)
 	sel_menu.id_pressed.connect(_on_selection_menu)
 	menu_bar.add_child(sel_menu)
+
+	# REMOTE
+	var remote_menu := PopupMenu.new()
+	remote_menu.name = "Remote"
+	remote_menu.add_item("Browse Remote Assets...", 0)
+	remote_menu.add_separator()
+	remote_menu.add_item("Push Current Tile", 10)
+	remote_menu.add_item("Push Current Palette", 11)
+	remote_menu.add_separator()
+	remote_menu.add_item("Sync Settings...", 20)
+	remote_menu.id_pressed.connect(_on_remote_menu)
+	menu_bar.add_child(remote_menu)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -852,6 +870,110 @@ func _setup_export() -> void:
 	_export_dialog = TileExportDialog.new()
 	_export_dialog.export_requested.connect(_on_export_tile)
 	add_child(_export_dialog)
+
+
+func _setup_remote() -> void:
+	_sync_config_dialog = SyncConfigDialog.new()
+	add_child(_sync_config_dialog)
+
+	_remote_browser = RemoteBrowserDialog.new()
+	_remote_browser.palette_pull_requested.connect(_on_remote_palette_pulled)
+	_remote_browser.tile_pull_requested.connect(_on_remote_tile_pulled)
+	add_child(_remote_browser)
+
+	# Connection status indicator in the status bar
+	_remote_status_label = Label.new()
+	_remote_status_label.text = ""
+	var status_bar: PanelContainer = %StatusBar
+	if status_bar:
+		var hbox := status_bar.get_child(0) if status_bar.get_child_count() > 0 else null
+		if hbox is HBoxContainer:
+			hbox.add_child(_remote_status_label)
+
+	AssetSyncManager.connection_status_changed.connect(_on_remote_connection_changed)
+	AssetSyncManager.asset_uploaded.connect(_on_remote_uploaded)
+	AssetSyncManager.asset_downloaded.connect(_on_remote_auto_pulled)
+	AssetSyncManager.new_remote_assets.connect(_on_new_remote_assets)
+
+
+func _schedule_palette_push() -> void:
+	AssetSyncManager.mark_palette_dirty(_palette)
+
+
+func _on_remote_menu(id: int) -> void:
+	match id:
+		0:
+			_remote_browser.show_browser()
+		10:
+			AssetSyncManager.push_tile(_tile, _palette)
+			_update_status("Pushing tile...")
+		11:
+			AssetSyncManager.push_palette(_palette)
+			_update_status("Pushing palette...")
+		20:
+			_sync_config_dialog.populate()
+			_sync_config_dialog.popup_centered()
+
+
+func _on_remote_connection_changed(ok: bool) -> void:
+	if _remote_status_label:
+		if ok:
+			_remote_status_label.text = "  Remote: Connected"
+			_remote_status_label.add_theme_color_override("font_color", Color.GREEN)
+		else:
+			_remote_status_label.text = "  Remote: Disconnected"
+			_remote_status_label.add_theme_color_override("font_color", Color.RED)
+
+
+func _on_remote_uploaded(_bucket: String, key: String, _etag: String) -> void:
+	_update_status("Pushed: %s" % key)
+
+
+func _on_remote_palette_pulled(palette: VoxelPalette) -> void:
+	if not palette:
+		return
+	_palette_set.palettes.append(palette)
+	_palette_set.set_active(_palette_set.count() - 1)
+	_palette = _palette_set.get_active()
+	_tile_renderer.set_tile(_tile, _palette)
+	_palette_panel.refresh()
+	_palette_editor.set_palette_set(_palette_set)
+	_gradient_panel.set_palette(_palette)
+	_update_status("Pulled palette: %s" % palette.palette_name)
+
+
+func _on_remote_tile_pulled(tile: WFCTileDef, palette: VoxelPalette) -> void:
+	if not tile:
+		return
+	_tile = tile
+	if palette:
+		_palette_set = TilePaletteSet.new()
+		_palette_set.palettes[0] = palette
+		_palette = _palette_set.get_active()
+		_palette_panel.set_palette_set(_palette_set)
+		_palette_editor.set_palette_set(_palette_set)
+	_gradient_panel.set_palette(_palette)
+	_tile_renderer.set_tile(_tile, _palette)
+	_tool_manager.undo_manager.clear()
+	_sync_tile_properties()
+	_tool_manager.refresh_metadata_markers()
+	_update_status("Pulled tile: %s" % tile.tile_name)
+
+
+func _on_remote_auto_pulled(bucket: String, key: String, _local_path: String) -> void:
+	# Auto-pulled assets: load palettes into the set, notify for tiles
+	if bucket == AssetSyncManager.PALETTE_BUCKET:
+		var palette := AssetSyncManager.palette_from_cache(key)
+		if palette:
+			_on_remote_palette_pulled(palette)
+	# Tiles are not auto-opened (would disrupt current work) — just notify
+	elif bucket == AssetSyncManager.TILE_BUCKET:
+		_update_status("New remote tile available: %s" % key)
+
+
+func _on_new_remote_assets(bucket: String, keys: PackedStringArray) -> void:
+	var label := "palettes" if bucket == AssetSyncManager.PALETTE_BUCKET else "tiles"
+	_update_status("Remote: %d new/updated %s" % [keys.size(), label])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1422,6 +1544,7 @@ func _update_custom_planes_list() -> void:
 func _on_palette_entry_edited(_index: int) -> void:
 	_palette_panel.refresh()
 	_tile_renderer.mark_all_dirty()
+	_schedule_palette_push()
 
 
 func _on_palette_switched(_index: int) -> void:
@@ -1450,12 +1573,14 @@ func _on_palette_add_entry_for_material(base_material: int) -> void:
 	_palette_panel.select_entry(idx)
 	_palette_editor.set_selected_entry(idx)
 	_update_status("Added %s palette entry" % mat_name)
+	_schedule_palette_push()
 
 
 func _on_palette_entry_removed(_index: int) -> void:
 	_palette_panel.refresh()
 	_tile_renderer.mark_all_dirty()
 	_update_status("Removed palette entry")
+	_schedule_palette_push()
 
 
 func _on_palette_entry_selected(index: int) -> void:
@@ -1772,6 +1897,7 @@ func _do_save(path: String) -> void:
 	var err := ResourceSaver.save(_tile, path)
 	if err == OK:
 		_update_status("Saved: %s" % path.get_file())
+		AssetSyncManager.mark_tile_dirty(_tile, _palette)
 	else:
 		_update_status("ERROR: Failed to save — error %d" % err)
 

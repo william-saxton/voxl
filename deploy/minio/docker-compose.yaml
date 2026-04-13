@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      # LAN-only deployment — no authentication required
+      MINIO_BROWSER: "on"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    volumes:
+      # ZFS-backed persistent storage on TrueNAS dataset
+      - "/mnt/Garage Pool/workspace/storage/minio:/data"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
