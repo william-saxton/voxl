@@ -58,6 +58,6 @@ RUN curl -o actions-runner.tar.gz -L \
 USER runner
 WORKDIR /home/runner/actions-runner
 
-COPY entrypoint.sh /home/runner/entrypoint.sh
+COPY --chmod=755 entrypoint.sh /home/runner/entrypoint.sh
 
 ENTRYPOINT ["/home/runner/entrypoint.sh"]
