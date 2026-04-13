@@ -30,8 +30,8 @@ func toggle() -> void:
 		_phase = 0
 		_escalation_timer = 0.0
 		if _player:
-			var p := Vector3i(_player.global_position)
-			_spawn_origin = Vector3i(p.x + 20, 1, p.z + 20)
+			var p := MaterialRegistry.world_to_voxel(_player.global_position)
+			_spawn_origin = Vector3i(p.x + 80, 16, p.z + 80)
 		print("[StressTest] STARTED - spawning around %s" % str(_spawn_origin))
 	else:
 		print("[StressTest] STOPPED")
@@ -63,17 +63,17 @@ func _physics_process(delta: float) -> void:
 func _run_phase(phase: int) -> void:
 	match phase:
 		1:
-			_spawn_line(MaterialRegistry.WATER_BASE, _spawn_origin, Vector3i(2, 0, 0), 10)
-			_log_phase("Phase 1: 10 water sources in a line")
+			_spawn_line(MaterialRegistry.WATER, _spawn_origin, Vector3i(2, 0, 0), 10)
+			_log_phase("Phase 1: 10 water blocks in a line")
 		2:
-			_spawn_line(MaterialRegistry.ACID_BASE, _spawn_origin + Vector3i(0, 0, 15), Vector3i(2, 0, 0), 10)
-			_log_phase("Phase 2: 10 acid sources (parallel line, reactions)")
+			_spawn_line(MaterialRegistry.ACID, _spawn_origin + Vector3i(0, 0, 60), Vector3i(2, 0, 0), 10)
+			_log_phase("Phase 2: 10 acid blocks (parallel line, reactions)")
 		3:
-			_spawn_grid_at(MaterialRegistry.WATER_BASE, _spawn_origin + Vector3i(40, 0, 0), 5)
-			_log_phase("Phase 3: 25 water sources (5x5 grid)")
+			_spawn_grid_at(MaterialRegistry.WATER, _spawn_origin + Vector3i(160, 0, 0), 5)
+			_log_phase("Phase 3: 25 water blocks (5x5 grid)")
 		4:
-			_spawn_grid_at(MaterialRegistry.LAVA_BASE, _spawn_origin + Vector3i(40, 0, 15), 5)
-			_log_phase("Phase 4: 25 lava sources (5x5 grid, reactions)")
+			_spawn_grid_at(MaterialRegistry.LAVA, _spawn_origin + Vector3i(160, 0, 60), 5)
+			_log_phase("Phase 4: 25 lava blocks (5x5 grid, reactions)")
 		_:
 			_escalation_timer += PHASE_DURATION
 			_run_escalation()
@@ -91,33 +91,33 @@ func _process(delta: float) -> void:
 
 func _run_escalation() -> void:
 	var batch := _phase - 4
-	var fluid_bases: Array[int] = [MaterialRegistry.WATER_BASE, MaterialRegistry.ACID_BASE, MaterialRegistry.LAVA_BASE]
-	var chosen: int = fluid_bases[batch % fluid_bases.size()]
-	var origin := _spawn_origin + Vector3i(batch * 20, 0, 60)
+	var fluid_ids: Array[int] = [MaterialRegistry.WATER, MaterialRegistry.ACID, MaterialRegistry.LAVA]
+	var chosen: int = fluid_ids[batch % fluid_ids.size()]
+	var origin := _spawn_origin + Vector3i(batch * 80, 0, 240)
 	_spawn_random(chosen, origin, 10)
-	_log_phase("Phase 5+: escalation batch %d, +10 sources" % batch)
+	_log_phase("Phase 5+: escalation batch %d, +10 blocks" % batch)
 
 
-func _spawn_line(fluid_base: int, origin: Vector3i, step: Vector3i, count: int) -> void:
+func _spawn_line(fluid_id: int, origin: Vector3i, step: Vector3i, count: int) -> void:
 	for i in count:
 		var pos := origin + step * i
 		if _can_place(pos):
-			_material_sim.place_fluid(pos, fluid_base)
+			_material_sim.place_fluid(pos, fluid_id)
 
 
-func _spawn_grid_at(fluid_base: int, origin: Vector3i, size: int) -> void:
+func _spawn_grid_at(fluid_id: int, origin: Vector3i, size: int) -> void:
 	for x in size:
 		for z in size:
 			var pos := origin + Vector3i(x * 3, 0, z * 3)
 			if _can_place(pos):
-				_material_sim.place_fluid(pos, fluid_base)
+				_material_sim.place_fluid(pos, fluid_id)
 
 
-func _spawn_random(fluid_base: int, origin: Vector3i, count: int) -> void:
+func _spawn_random(fluid_id: int, origin: Vector3i, count: int) -> void:
 	for i in count:
-		var pos := origin + Vector3i(randi_range(-15, 15), 0, randi_range(-15, 15))
+		var pos := origin + Vector3i(randi_range(-60, 60), 0, randi_range(-60, 60))
 		if _can_place(pos):
-			_material_sim.place_fluid(pos, fluid_base)
+			_material_sim.place_fluid(pos, fluid_id)
 
 
 func _can_place(pos: Vector3i) -> bool:

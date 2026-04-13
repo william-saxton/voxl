@@ -4,6 +4,7 @@ extends Node
 @export var raycast_distance: float = 200.0
 
 var _voxel_tool: VoxelTool
+var _terrain: VoxelTerrain
 var _material_sim: MaterialSimulatorNative
 var _camera: Camera3D
 var _player: Node3D
@@ -14,10 +15,10 @@ const SLOT_LAVA := 1
 const SLOT_ACID := 2
 const SLOT_DIRT := 3
 
-var _fluid_bases: Array[int] = [
-	MaterialRegistry.WATER_BASE,
-	MaterialRegistry.LAVA_BASE,
-	MaterialRegistry.ACID_BASE,
+var _fluid_ids: Array[int] = [
+	MaterialRegistry.WATER,
+	MaterialRegistry.LAVA,
+	MaterialRegistry.ACID,
 ]
 var _selected_slot: int = SLOT_WATER
 
@@ -25,6 +26,7 @@ const SLOT_NAMES: Array[String] = ["Water", "Lava", "Acid", "Dirt"]
 
 
 func initialize(terrain: VoxelTerrain, material_sim: MaterialSimulatorNative, player: Node3D = null, hud: StressTestHUD = null) -> void:
+	_terrain = terrain
 	_voxel_tool = terrain.get_voxel_tool()
 	_voxel_tool.channel = VoxelBuffer.CHANNEL_TYPE
 	_material_sim = material_sim
@@ -64,13 +66,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		print("Selected: Dirt")
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("debug_spawn_water"):
-		_spawn_grid(MaterialRegistry.WATER_BASE, Vector3i(0, 0, 0))
+		_spawn_grid(MaterialRegistry.WATER, Vector3i(0, 0, 0))
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("debug_spawn_acid"):
-		_spawn_grid(MaterialRegistry.ACID_BASE, Vector3i(20, 0, 0))
+		_spawn_grid(MaterialRegistry.ACID, Vector3i(80, 0, 0))
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("debug_spawn_lava"):
-		_spawn_grid(MaterialRegistry.LAVA_BASE, Vector3i(0, 0, 20))
+		_spawn_grid(MaterialRegistry.LAVA, Vector3i(0, 0, 80))
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("debug_clear"):
 		_clear_fluids_around_player()
@@ -84,31 +86,31 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-func _spawn_grid(fluid_base: int, offset: Vector3i) -> void:
+func _spawn_grid(fluid_id: int, offset: Vector3i) -> void:
 	if not _material_sim or not _player:
 		return
-	var center := Vector3i(_player.global_position) + offset
-	center.y = 1
+	var center_v := MaterialRegistry.world_to_voxel(_player.global_position) + offset
+	center_v.y = 16
 	var count := 0
-	for x in range(-2, 3):
-		for z in range(-2, 3):
-			var pos := center + Vector3i(x * 3, 0, z * 3)
+	for x in range(-8, 9):
+		for z in range(-8, 9):
+			var pos := center_v + Vector3i(x, 0, z)
 			var below := _voxel_tool.get_voxel(pos + Vector3i.DOWN)
 			if _voxel_tool.get_voxel(pos) == MaterialRegistry.AIR and MaterialRegistry.is_solid(below):
-				_material_sim.place_fluid(pos, fluid_base)
+				_material_sim.place_fluid(pos, fluid_id)
 				count += 1
-	print("Spawned %d %s sources" % [count, _fluid_name(fluid_base)])
+	print("Spawned %d %s blocks" % [count, _fluid_name(fluid_id)])
 
 
 func _clear_fluids_around_player() -> void:
 	if not _material_sim or not _player:
 		return
-	var center := Vector3i(_player.global_position)
-	var radius := 30
+	var center := MaterialRegistry.world_to_voxel(_player.global_position)
+	var radius := 120
 	var count := 0
 	for x in range(-radius, radius + 1):
 		for z in range(-radius, radius + 1):
-			for y in range(-5, 5):
+			for y in range(-20, 20):
 				var pos := center + Vector3i(x, y, z)
 				var voxel := _voxel_tool.get_voxel(pos)
 				if MaterialRegistry.is_simulatable(voxel):
@@ -117,12 +119,12 @@ func _clear_fluids_around_player() -> void:
 	print("Cleared %d fluid blocks" % count)
 
 
-static func _fluid_name(base: int) -> String:
-	if base == MaterialRegistry.WATER_BASE:
+static func _fluid_name(id: int) -> String:
+	if id == MaterialRegistry.WATER:
 		return "Water"
-	if base == MaterialRegistry.LAVA_BASE:
+	if id == MaterialRegistry.LAVA:
 		return "Lava"
-	if base == MaterialRegistry.ACID_BASE:
+	if id == MaterialRegistry.ACID:
 		return "Acid"
 	return "Unknown"
 
@@ -189,15 +191,18 @@ func _try_place() -> void:
 		if _material_sim:
 			_material_sim.sync_voxel(place_pos, MaterialRegistry.DIRT)
 	else:
-		var base: int = _fluid_bases[_selected_slot]
+		var fluid_id: int = _fluid_ids[_selected_slot]
 		if _material_sim:
-			_material_sim.place_fluid(place_pos, base)
+			_material_sim.place_fluid(place_pos, fluid_id)
 		else:
-			_voxel_tool.set_voxel(place_pos, MaterialRegistry.fluid_id(base, MaterialRegistry.FLUID_LEVELS - 1))
+			_voxel_tool.set_voxel(place_pos, fluid_id)
 
 
 func _do_raycast() -> VoxelRaycastResult:
+	if not _terrain:
+		return null
 	var mouse_pos := get_viewport().get_mouse_position()
 	var ray_origin := _camera.project_ray_origin(mouse_pos)
 	var ray_dir := _camera.project_ray_normal(mouse_pos)
+
 	return _voxel_tool.raycast(ray_origin, ray_dir, raycast_distance)

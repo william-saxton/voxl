@@ -5,7 +5,14 @@ extends CharacterBody3D
 @export var gravity: float = 40.0
 @export var jump_velocity: float = 16.0
 
+var terrain_ready: bool = false
+
 func _physics_process(delta: float) -> void:
+	# Hold position until terrain has loaded beneath us
+	if not terrain_ready:
+		velocity = Vector3.ZERO
+		return
+
 	if not is_on_floor():
 		velocity.y -= gravity * delta
 	elif Input.is_action_just_pressed("ui_accept"):

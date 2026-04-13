@@ -11,7 +11,6 @@
 #include <chrono>
 #include <atomic>
 #include <vector>
-#include <unordered_set>
 #include <cstring>
 #include <algorithm>
 #include <queue>
@@ -24,32 +23,26 @@ class MaterialSimulatorNative : public Node {
 
 public:
 	static constexpr int CHUNK_X = 32;
-	static constexpr int CHUNK_Y = 32;
+	static constexpr int CHUNK_Y = 112;
 	static constexpr int CHUNK_Z = 32;
 	static constexpr int CHUNK_VOL = CHUNK_X * CHUNK_Y * CHUNK_Z;
 
-	static constexpr int GRID_W = 11;
-	static constexpr int GRID_H = 11;
-	static constexpr int LOAD_RADIUS = 5;
-	static constexpr int TOTAL_CHUNKS = GRID_W * GRID_H;
+	static constexpr float VOXEL_SCALE = 0.25f;
+	static constexpr float INV_VOXEL_SCALE = 4.0f;
 
-	static constexpr uint8_t MAT_AIR        = 0;
-	static constexpr uint8_t MAT_STONE      = 1;
-	static constexpr uint8_t MAT_BEDROCK    = 2;
-	static constexpr uint8_t MAT_WATER_BASE = 3;
-	static constexpr uint8_t MAT_DIRT       = 19;
-	static constexpr uint8_t MAT_MUD        = 20;
-	static constexpr uint8_t MAT_LAVA_BASE  = 21;
-	static constexpr uint8_t MAT_ACID_BASE  = 37;
-	static constexpr uint8_t MAT_GAS_BASE   = 53;
-	static constexpr uint8_t NOT_LOADED     = 0x7F;
-	static constexpr uint8_t NO_REACTION    = 0xFF;
+	static constexpr uint8_t MAT_AIR     = 0;
+	static constexpr uint8_t MAT_STONE   = 1;
+	static constexpr uint8_t MAT_BEDROCK = 2;
+	static constexpr uint8_t MAT_WATER   = 3;
+	static constexpr uint8_t MAT_DIRT    = 4;
+	static constexpr uint8_t MAT_MUD     = 5;
+	static constexpr uint8_t MAT_LAVA    = 6;
+	static constexpr uint8_t MAT_ACID    = 7;
+	static constexpr uint8_t MAT_GAS     = 8;
+	static constexpr uint16_t NOT_LOADED  = 0x7F7F;
+	static constexpr uint16_t NO_REACTION = 0xFFFF;
 
-	static constexpr int FLUID_LEVELS    = 16;
-	static constexpr uint8_t SOURCE_FLAG = 0x80;
-	static constexpr uint8_t ID_MASK     = 0x7F;
-
-	static constexpr int APPLY_CHANGES_CAP = 256;
+	static constexpr int APPLY_CHANGES_CAP = 2048;
 	static constexpr int NUM_WORKERS = 8;
 	static constexpr int NUM_LOADERS = 4;
 
@@ -57,12 +50,14 @@ public:
 	~MaterialSimulatorNative();
 
 	void initialize(Object *p_terrain, Node3D *p_player);
-	void place_fluid(const Vector3i &pos, int fluid_base, int level = FLUID_LEVELS - 1);
+	void place_fluid(const Vector3i &pos, int fluid_id);
 	void remove_voxel(const Vector3i &pos);
 	void sync_voxel(const Vector3i &pos, int voxel_id);
 
+	void set_sim_radius(int radius);
+	int get_sim_radius() const;
+
 	int get_active_cell_count() const;
-	int get_source_block_count() const;
 	double get_last_tick_ms() const;
 	int get_last_changes_count() const;
 
@@ -73,59 +68,63 @@ protected:
 	static void _bind_methods();
 
 private:
-	// ── Material helpers ──
+	// ── Material helpers (operate on base material = low byte) ──
 
-	static inline uint8_t encode(int id, bool is_source) {
-		return static_cast<uint8_t>((id & ID_MASK) | (is_source ? SOURCE_FLAG : 0));
+	static inline uint8_t base_material(uint16_t id) { return id & 0xFF; }
+	static inline uint8_t visual_variant(uint16_t id) { return (id >> 8) & 0xFF; }
+	static inline uint16_t make_voxel_id(uint8_t base, uint8_t visual) {
+		return (static_cast<uint16_t>(visual) << 8) | base;
 	}
-	static inline uint8_t mid(uint8_t raw) { return raw & ID_MASK; }
-	static inline bool src(uint8_t raw) { return (raw & SOURCE_FLAG) != 0; }
 
-	static inline uint8_t fbase(uint8_t id) {
-		if (id >= MAT_WATER_BASE && id < MAT_WATER_BASE + FLUID_LEVELS) return MAT_WATER_BASE;
-		if (id >= MAT_LAVA_BASE  && id < MAT_LAVA_BASE  + FLUID_LEVELS) return MAT_LAVA_BASE;
-		if (id >= MAT_ACID_BASE  && id < MAT_ACID_BASE  + FLUID_LEVELS) return MAT_ACID_BASE;
-		if (id >= MAT_GAS_BASE   && id < MAT_GAS_BASE   + FLUID_LEVELS) return MAT_GAS_BASE;
-		return 0;
+	static inline bool is_fluid(uint16_t id) {
+		uint8_t b = base_material(id);
+		return b == MAT_WATER || b == MAT_LAVA || b == MAT_ACID;
 	}
-	static inline uint8_t flvl(uint8_t id) {
-		uint8_t b = fbase(id);
-		return (b > 0) ? (id - b) : 0;
+	static inline bool is_gas(uint16_t id) { return base_material(id) == MAT_GAS; }
+	static inline bool is_solid(uint16_t id) {
+		uint8_t b = base_material(id);
+		return b != MAT_AIR && !is_fluid(id) && !is_gas(id);
 	}
-	static inline uint8_t mkfluid(uint8_t base, int level, bool s) {
-		uint8_t id = base + static_cast<uint8_t>(CLAMP(level, 0, FLUID_LEVELS - 1));
-		return s ? (id | SOURCE_FLAG) : id;
+
+	// ── World-to-voxel coordinate conversion ──
+
+	static inline int world_to_voxel(float w) {
+		return int(Math::floor(w * INV_VOXEL_SCALE));
 	}
-	static inline bool is_fluid(uint8_t id) {
-		uint8_t b = fbase(id);
-		return b == MAT_WATER_BASE || b == MAT_LAVA_BASE || b == MAT_ACID_BASE;
-	}
-	static inline bool is_gas(uint8_t id) { return fbase(id) == MAT_GAS_BASE; }
-	static inline bool is_solid(uint8_t id) { return id != MAT_AIR && !is_fluid(id) && !is_gas(id); }
-	static inline int spread_loss(uint8_t base) { return (base == MAT_LAVA_BASE) ? 4 : 2; }
 
 	// ── Chunk coordinate helpers (CHUNK = 32 = 2^5, uses arithmetic right shift) ──
 
 	static inline int _chunk_coord(int w) { return w >> 5; }
 	static inline int _local_coord(int w) { return w & 0x1F; }
 
+	// ── Grid size (configurable from GDScript via sim_radius property) ──
+
+	int _sim_radius = 7;
+	int _grid_w() const { return _sim_radius * 2 + 1; }
+	int _grid_h() const { return _sim_radius * 2 + 1; }
+	int _total_chunks() const { return _grid_w() * _grid_h(); }
+
 	// ── SimChunk ──
 
 	struct SimChunk {
-		uint8_t buf_a[CHUNK_VOL];
-		uint8_t buf_b[CHUNK_VOL];
-		uint8_t *current = buf_a;
-		uint8_t *next_buf = buf_b;
+		uint16_t buf_a[CHUNK_VOL];
+		uint16_t buf_b[CHUNK_VOL];
+		uint16_t *current = buf_a;
+		uint16_t *next_buf = buf_b;
 		int wcx = 0, wcz = 0;
 		enum State : uint8_t { UNLOADED, LOADING, LOADED } state = UNLOADED;
 	};
 
 	SimChunk *_chunks = nullptr;
-	SimChunk *_grid[GRID_W][GRID_H] = {};
+	std::vector<SimChunk *> _grid;
 	int _center_cx = 0, _center_cz = 0;
-	int _origin_y = -16;
+	int _origin_y = 0;
 
 	SimChunk *_chunk_at(int cx, int cz) const;
+
+	// Grid access helpers
+	SimChunk *& _grid_at(int gx, int gz) { return _grid[gx + gz * _grid_w()]; }
+	SimChunk * _grid_at(int gx, int gz) const { return _grid[gx + gz * _grid_w()]; }
 
 	// ── Terrain ──
 
@@ -141,7 +140,6 @@ private:
 	int64_t _last_tick_usec = 0;
 	int _last_changes_count = 0;
 	bool _sim_ready = false;
-	std::unordered_set<int64_t> _source_positions;
 
 	// ── Chunk loader thread pool ──
 
@@ -152,11 +150,10 @@ private:
 	struct ChunkLoadResult {
 		SimChunk *chunk;
 		int wcx, wcz;
-		uint8_t data[CHUNK_VOL];
+		uint16_t data[CHUNK_VOL];
 	};
 
 	std::vector<std::thread> _loader_threads;
-	std::vector<Ref<RefCounted>> _loader_voxel_tools;
 	std::mutex _loader_queue_mutex;
 	std::condition_variable _loader_cv;
 	std::queue<ChunkLoadRequest> _loader_queue;
@@ -183,10 +180,11 @@ private:
 	void _wait_for_terrain();
 	void _setup_sim();
 	void _init_grid();
+	void _reallocate_chunks();
 
 	// ── Buffer writes ──
 
-	void _write_cell(const Vector3i &world_pos, uint8_t val);
+	void _write_cell(const Vector3i &world_pos, uint16_t val);
 
 	// ── Tick ──
 
@@ -201,16 +199,16 @@ private:
 
 	// ── Simulation (wx/wz = world coords, wy = local Y 0..CHUNK_Y-1) ──
 
-	inline uint8_t _read_raw(int wx, int wy, int wz) const {
+	inline uint16_t _read_raw(int wx, int wy, int wz) const {
 		if (wy < 0 || wy >= CHUNK_Y) return MAT_BEDROCK;
 		SimChunk *c = _chunk_at(_chunk_coord(wx), _chunk_coord(wz));
 		if (!c) return MAT_BEDROCK;
-		if (c->state != SimChunk::LOADED) return NOT_LOADED; // distinct from solid bedrock
+		if (c->state != SimChunk::LOADED) return NOT_LOADED;
 		int lx = _local_coord(wx), lz = _local_coord(wz);
 		return c->current[lx + wy * CHUNK_X + lz * CHUNK_X * CHUNK_Y];
 	}
 
-	inline void _write_next(int wx, int wy, int wz, uint8_t val) {
+	inline void _write_next(int wx, int wy, int wz, uint16_t val) {
 		if (wy < 0 || wy >= CHUNK_Y) return;
 		SimChunk *c = _chunk_at(_chunk_coord(wx), _chunk_coord(wz));
 		if (!c || c->state != SimChunk::LOADED) return;
@@ -218,7 +216,7 @@ private:
 		c->next_buf[lx + wy * CHUNK_X + lz * CHUNK_X * CHUNK_Y] = val;
 	}
 
-	inline void _write_next_if_unchanged(int wx, int wy, int wz, uint8_t val) {
+	inline void _write_next_if_unchanged(int wx, int wy, int wz, uint16_t val) {
 		if (wy < 0 || wy >= CHUNK_Y) return;
 		SimChunk *c = _chunk_at(_chunk_coord(wx), _chunk_coord(wz));
 		if (!c || c->state != SimChunk::LOADED) return;
@@ -228,31 +226,15 @@ private:
 		c->next_buf[idx] = val;
 	}
 
-	void _deplete_adjacent_source(int wx, int wy, int wz, uint8_t base);
-	uint8_t _react(int wx, int wy, int wz, uint8_t my_id, uint8_t my_raw);
-	bool _is_fed(int wx, int wy, int wz, uint8_t base, uint8_t level) const;
-	void _sim_fluid(int wx, int wy, int wz, uint8_t raw);
-	void _sim_gas(int wx, int wy, int wz, uint8_t raw);
+	uint16_t _react(int wx, int wy, int wz, uint16_t my_id);
+	void _sim_fluid(int wx, int wy, int wz, uint16_t id);
+	void _sim_gas(int wx, int wy, int wz, uint16_t id);
 	void _sim_cell(int wx, int wy, int wz);
 
 	// ── Utilities ──
 
-	static int64_t _pos_key(const Vector3i &p) {
-		return (int64_t(p.x) & 0xFFFFF) | ((int64_t(p.y) & 0xFFF) << 20) | ((int64_t(p.z) & 0xFFFFF) << 32);
-	}
-
-	static Vector3i _decode_pos_key(int64_t key) {
-		int x = (int)(key & 0xFFFFF);
-		if (x & 0x80000) x -= 0x100000;
-		int y = (int)((key >> 20) & 0xFFF);
-		if (y & 0x800) y -= 0x1000;
-		int z = (int)((key >> 32) & 0xFFFFF);
-		if (z & 0x80000) z -= 0x100000;
-		return Vector3i(x, y, z);
-	}
-
 	int _voxel_get(const Ref<RefCounted> &tool, const Vector3i &pos) const;
-	bool _voxel_set(const Vector3i &pos, int value); // returns false if area not editable
+	bool _voxel_set(const Vector3i &pos, int value);
 };
 
 } // namespace godot

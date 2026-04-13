@@ -21,25 +21,21 @@ layout(push_constant) uniform Params {
 } pc;
 
 const int SIM_X = 256;
-const int SIM_Y = 32;
+const int SIM_Y = 16;
 const int SIM_Z = 256;
 
-const uint MAT_AIR        = 0u;
-const uint MAT_STONE      = 1u;
-const uint MAT_BEDROCK    = 2u;
-const uint MAT_WATER_BASE = 3u;
-const uint MAT_DIRT       = 19u;
-const uint MAT_MUD        = 20u;
-const uint MAT_LAVA_BASE  = 21u;
-const uint MAT_ACID_BASE  = 37u;
-const uint MAT_GAS_BASE   = 53u;
-const uint FLUID_LEVELS   = 16u;
-
-const uint SOURCE_FLAG = 0x80u;
-const uint ID_MASK     = 0x7Fu;
+const uint MAT_AIR     = 0u;
+const uint MAT_STONE   = 1u;
+const uint MAT_BEDROCK = 2u;
+const uint MAT_WATER   = 3u;
+const uint MAT_DIRT    = 4u;
+const uint MAT_MUD     = 5u;
+const uint MAT_LAVA    = 6u;
+const uint MAT_ACID    = 7u;
+const uint MAT_GAS     = 8u;
+const uint NOT_LOADED  = 0x7Fu;
 const uint NO_REACTION = 0xFFu;
 const uint GEO_MAX     = 32768u;
-const uint NOT_LOADED  = 0x7Fu;
 
 // ── helpers ──
 
@@ -49,52 +45,24 @@ uint read_raw(ivec3 p) {
 	return imageLoad(tex_current, p).r;
 }
 
-uint mid(uint raw)     { return raw & ID_MASK; }
-bool src(uint raw)     { return (raw & SOURCE_FLAG) != 0u; }
-
 void wrt(ivec3 p, uint v) {
 	if (any(lessThan(p, ivec3(0))) || p.x >= SIM_X || p.y >= SIM_Y || p.z >= SIM_Z)
 		return;
 	imageStore(tex_next, p, uvec4(v, 0u, 0u, 0u));
 }
 
-uint fbase(uint id) {
-	if (id >= MAT_WATER_BASE && id < MAT_WATER_BASE + FLUID_LEVELS) return MAT_WATER_BASE;
-	if (id >= MAT_LAVA_BASE  && id < MAT_LAVA_BASE  + FLUID_LEVELS) return MAT_LAVA_BASE;
-	if (id >= MAT_ACID_BASE  && id < MAT_ACID_BASE  + FLUID_LEVELS) return MAT_ACID_BASE;
-	if (id >= MAT_GAS_BASE   && id < MAT_GAS_BASE   + FLUID_LEVELS) return MAT_GAS_BASE;
-	return 0u;
+bool is_fluid(uint id) { return id == MAT_WATER || id == MAT_LAVA || id == MAT_ACID; }
+bool is_gas(uint id)   { return id == MAT_GAS; }
+bool is_solid(uint id) { return id != MAT_AIR && !is_fluid(id) && !is_gas(id); }
+
+// Simple hash for deterministic random
+uint hash_pos(ivec3 p, uint tick) {
+	return uint(p.x * 73856093) ^ uint(p.y * 19349663) ^ uint(p.z * 83492791) ^ (tick * 2654435761u);
 }
 
-uint flvl(uint id) {
-	uint b = fbase(id);
-	return (b > 0u) ? (id - b) : 0u;
-}
+// ── reactions ──
 
-uint mkfluid(uint base, uint level, bool s) {
-	uint id = base + clamp(level, 0u, FLUID_LEVELS - 1u);
-	return s ? (id | SOURCE_FLAG) : id;
-}
-
-bool is_fluid(uint id) {
-	uint b = fbase(id);
-	return b == MAT_WATER_BASE || b == MAT_LAVA_BASE || b == MAT_ACID_BASE;
-}
-
-bool is_gas(uint id)      { return fbase(id) == MAT_GAS_BASE; }
-bool is_solid(uint id)    { return id != MAT_AIR && !is_fluid(id) && !is_gas(id); }
-bool is_passable(uint id) { return id == MAT_AIR || is_fluid(id) || is_gas(id); }
-
-uint spread_loss(uint base) {
-	if (base == MAT_LAVA_BASE) return 4u;
-	return 2u;
-}
-
-// ── reactions (pull model) ──
-
-uint react(ivec3 pos, uint my_id, uint my_raw) {
-	uint my_b = fbase(my_id);
-
+uint react(ivec3 pos, uint my_id) {
 	ivec3 dirs[6] = ivec3[6](
 		ivec3(1,0,0), ivec3(-1,0,0),
 		ivec3(0,1,0), ivec3(0,-1,0),
@@ -102,212 +70,159 @@ uint react(ivec3 pos, uint my_id, uint my_raw) {
 	);
 
 	for (int i = 0; i < 6; i++) {
-		uint nr = read_raw(pos + dirs[i]);
-		uint ni = mid(nr);
+		uint ni = read_raw(pos + dirs[i]);
 		if (ni == MAT_AIR) continue;
-		uint nb = fbase(ni);
 
-		if (my_b == MAT_WATER_BASE && nb == MAT_LAVA_BASE) {
-			uint l = flvl(my_id);
-			return (l == 0u) ? MAT_AIR : mkfluid(my_b, l - 1u, src(my_raw));
+		if (my_id == MAT_WATER && ni == MAT_LAVA) {
+			wrt(pos + dirs[i], MAT_STONE);
+			return MAT_AIR;
 		}
-		if (my_b == MAT_LAVA_BASE && nb == MAT_WATER_BASE) {
-			uint l = flvl(my_id);
-			return (l == 0u) ? MAT_STONE : mkfluid(my_b, l - 1u, src(my_raw));
+		if (my_id == MAT_LAVA && ni == MAT_WATER) {
+			wrt(pos + dirs[i], MAT_AIR);
+			return MAT_STONE;
 		}
-		if (my_b == MAT_WATER_BASE && nb == MAT_ACID_BASE) {
-			uint l = flvl(my_id);
-			return (l == 0u) ? mkfluid(MAT_GAS_BASE, FLUID_LEVELS - 1u, false) : mkfluid(my_b, l - 1u, src(my_raw));
+		if (my_id == MAT_WATER && ni == MAT_ACID) {
+			wrt(pos + dirs[i], MAT_GAS);
+			return MAT_GAS;
 		}
-		if (my_b == MAT_ACID_BASE && nb == MAT_WATER_BASE) {
-			uint l = flvl(my_id);
-			return (l == 0u) ? mkfluid(MAT_GAS_BASE, FLUID_LEVELS - 1u, false) : mkfluid(my_b, l - 1u, src(my_raw));
+		if (my_id == MAT_ACID && ni == MAT_WATER) {
+			wrt(pos + dirs[i], MAT_GAS);
+			return MAT_GAS;
 		}
-		if (my_id == MAT_DIRT && nb == MAT_WATER_BASE)
+		if (my_id == MAT_DIRT && ni == MAT_WATER) {
 			return MAT_MUD;
+		}
 	}
 	return NO_REACTION;
 }
 
-// ── is_fed ──
-
-bool is_fed(ivec3 pos, uint base, uint level) {
-	uint above_id = mid(read_raw(pos + ivec3(0, 1, 0)));
-	if (is_fluid(above_id) && fbase(above_id) == base)
-		return true;
-
-	ivec3 hd[8] = ivec3[8](
-		ivec3(1,0,0), ivec3(-1,0,0), ivec3(0,0,1), ivec3(0,0,-1),
-		ivec3(1,0,1), ivec3(1,0,-1), ivec3(-1,0,1), ivec3(-1,0,-1)
-	);
-	for (int i = 0; i < 8; i++) {
-		uint nr = read_raw(pos + hd[i]);
-		uint ni = mid(nr);
-		if (!is_fluid(ni) || fbase(ni) != base) continue;
-		uint nl = flvl(ni);
-		if (nl > level) return true;
-		if (src(nr) && nl >= level) return true;
-	}
-	return false;
-}
-
 // ── fluid simulation ──
 
-void sim_fluid(ivec3 pos, uint raw) {
-	uint id   = mid(raw);
-	uint base = fbase(id);
-	uint lvl  = flvl(id);
-	bool s    = src(raw);
-
-	uint td = (base == MAT_LAVA_BASE) ? 3u : 1u;
-	if (td > 1u && pc.tick_count % td != 0u) {
-		wrt(pos, raw);
+void sim_fluid(ivec3 pos, uint id) {
+	// Lava ticks slower
+	if (id == MAT_LAVA && pc.tick_count % 3u != 0u) {
+		wrt(pos, id);
 		return;
 	}
 
-	uint rx = react(pos, id, raw);
+	// Check reactions
+	uint rx = react(pos, id);
 	if (rx != NO_REACTION) {
 		wrt(pos, rx);
 		return;
 	}
 
-	if (!s && !is_fed(pos, base, lvl)) {
-		wrt(pos, (lvl == 0u) ? MAT_AIR : mkfluid(base, lvl - 1u, false));
-		return;
-	}
-
+	// Check below
 	ivec3 below = pos + ivec3(0, -1, 0);
-	uint br = read_raw(below);
-	uint bi = mid(br);
+	uint bi = read_raw(below);
 
-	if (bi == MAT_AIR || is_gas(bi)) {
-		wrt(below, mkfluid(base, FLUID_LEVELS - 1u, false));
-		if (s) {
-			wrt(pos, raw);
-		} else if (is_gas(bi)) {
-			wrt(pos, br);
-		} else {
-			wrt(pos, MAT_AIR);
-		}
+	// Fall into air
+	if (bi == MAT_AIR) {
+		wrt(below, id);
+		wrt(pos, MAT_AIR);
 		return;
 	}
 
-	if (is_fluid(bi) && fbase(bi) == base) {
-		uint bl = flvl(bi);
-		if (bl < FLUID_LEVELS - 1u) {
-			uint tr = min(lvl, FLUID_LEVELS - 1u - bl);
-			if (tr > 0u) {
-				wrt(below, mkfluid(base, bl + tr, src(br)));
-				if (s) {
-					wrt(pos, raw);
-				} else {
-					uint rem = lvl - tr;
-					wrt(pos, (rem == 0u) ? MAT_AIR : mkfluid(base, rem, false));
-				}
+	// Fall through gas (swap)
+	if (is_gas(bi)) {
+		wrt(below, id);
+		wrt(pos, bi);
+		return;
+	}
+
+	// On solid ground: stay
+	if (is_solid(bi)) {
+		wrt(pos, id);
+		return;
+	}
+
+	// On fluid: try random horizontal move
+	if (is_fluid(bi)) {
+		uint h = hash_pos(pos, pc.tick_count);
+		uint start_dir = h & 3u;
+
+		ivec3 cd[4] = ivec3[4](ivec3(1,0,0), ivec3(-1,0,0), ivec3(0,0,1), ivec3(0,0,-1));
+		for (uint i = 0u; i < 4u; i++) {
+			uint di = (start_dir + i) & 3u;
+			ivec3 np = pos + cd[di];
+			uint neighbor = read_raw(np);
+			if (neighbor != MAT_AIR) continue;
+
+			uint target_below = read_raw(np + ivec3(0, -1, 0));
+			if (is_solid(target_below) || target_below == id) {
+				wrt(np, id);
+				wrt(pos, MAT_AIR);
 				return;
 			}
 		}
+
+		// Can't move: stay
+		wrt(pos, id);
+		return;
 	}
 
-	if (is_solid(bi)) {
-		uint sl = spread_loss(base);
-
-		if (lvl >= sl) {
-			uint sp = lvl - sl;
-			ivec3 cd[4] = ivec3[4](ivec3(1,0,0), ivec3(-1,0,0), ivec3(0,0,1), ivec3(0,0,-1));
-			for (int i = 0; i < 4; i++) {
-				ivec3 np = pos + cd[i];
-				uint nr = read_raw(np);
-				uint ni = mid(nr);
-				if (ni == MAT_AIR) {
-					wrt(np, mkfluid(base, sp, false));
-				} else if (is_fluid(ni) && fbase(ni) == base && flvl(ni) < sp) {
-					wrt(np, mkfluid(base, sp, src(nr)));
-				}
-			}
-		}
-
-		uint dsl = sl + 1u;
-		if (lvl >= dsl) {
-			uint dp = lvl - dsl;
-			ivec3 dd[4] = ivec3[4](ivec3(1,0,1), ivec3(1,0,-1), ivec3(-1,0,1), ivec3(-1,0,-1));
-			for (int i = 0; i < 4; i++) {
-				ivec3 np = pos + dd[i];
-				uint nr = read_raw(np);
-				uint ni = mid(nr);
-				if (ni == MAT_AIR) {
-					wrt(np, mkfluid(base, dp, false));
-				} else if (is_fluid(ni) && fbase(ni) == base && flvl(ni) < dp) {
-					wrt(np, mkfluid(base, dp, src(nr)));
-				}
-			}
-		}
-	}
-
-	wrt(pos, raw);
+	// Default: stay
+	wrt(pos, id);
 }
 
 // ── gas simulation ──
 
-void sim_gas(ivec3 pos, uint raw) {
-	uint id   = mid(raw);
-	uint base = fbase(id);
-	uint lvl  = flvl(id);
-
+void sim_gas(ivec3 pos, uint id) {
 	if (pc.tick_count % 2u != 0u) {
-		wrt(pos, raw);
+		wrt(pos, id);
 		return;
 	}
 
-	if (lvl <= 1u) {
+	// Dissipate randomly
+	uint h = hash_pos(pos, pc.tick_count);
+	if ((h & 0xFu) == 0u) {
 		wrt(pos, MAT_AIR);
 		return;
 	}
-	uint nl = lvl - 1u;
 
+	// Rise
 	ivec3 above = pos + ivec3(0, 1, 0);
-	uint ar = read_raw(above);
-	uint ai = mid(ar);
+	uint ai = read_raw(above);
 
 	if (ai == MAT_AIR) {
-		wrt(above, mkfluid(base, nl, false));
+		wrt(above, id);
 		wrt(pos, MAT_AIR);
 		return;
 	}
-	if (is_gas(ai) && fbase(ai) == base && flvl(ai) < nl) {
-		wrt(above, mkfluid(base, nl, false));
-		wrt(pos, MAT_AIR);
+	if (is_fluid(ai)) {
+		wrt(above, id);
+		wrt(pos, ai);
 		return;
 	}
 
-	wrt(pos, mkfluid(base, nl, false));
-
-	if (nl >= 4u) {
-		uint sp = nl - 4u;
-		ivec3 cd[4] = ivec3[4](ivec3(1,0,0), ivec3(-1,0,0), ivec3(0,0,1), ivec3(0,0,-1));
-		for (int i = 0; i < 4; i++) {
-			ivec3 np = pos + cd[i];
-			if (mid(read_raw(np)) == MAT_AIR)
-				wrt(np, mkfluid(base, sp, false));
+	// Spread horizontally
+	uint start_dir = (h >> 4u) & 3u;
+	ivec3 cd[4] = ivec3[4](ivec3(1,0,0), ivec3(-1,0,0), ivec3(0,0,1), ivec3(0,0,-1));
+	for (uint i = 0u; i < 4u; i++) {
+		uint di = (start_dir + i) & 3u;
+		ivec3 np = pos + cd[di];
+		if (read_raw(np) == MAT_AIR) {
+			wrt(np, id);
+			wrt(pos, MAT_AIR);
+			return;
 		}
 	}
+
+	wrt(pos, id);
 }
 
-// ── diff mode: compare mirror vs tex_next, queue changes for CPU ──
+// ── diff mode ──
 
 void run_diff(ivec3 pos) {
 	uint mirror_raw = imageLoad(tex_mirror, pos).r;
 	uint next_raw   = imageLoad(tex_next, pos).r;
 
-	uint mirror_id = mirror_raw & ID_MASK;
-	uint next_id   = next_raw & ID_MASK;
-
-	if (mirror_id != next_id) {
+	if (mirror_raw != next_raw) {
 		uint idx = atomicAdd(geo.change_count, 1u);
 		if (idx < GEO_MAX) {
 			geo.changes[idx] = uvec2(
 				uint(pos.x) | (uint(pos.y) << 10u) | (uint(pos.z) << 20u),
-				next_id
+				next_raw
 			);
 			imageStore(tex_mirror, pos, uvec4(next_raw, 0u, 0u, 0u));
 		}
@@ -325,33 +240,32 @@ void main() {
 		return;
 	}
 
-	// mode 0: simulate (tex_next pre-copied from tex_current, so non-updating cells already correct)
+	// mode 0: simulate
 	uint parity = uint((pos.x + pos.y + pos.z) % 2);
 	if (parity != pc.tick_parity)
 		return;
 
-	uint raw = imageLoad(tex_current, pos).r;
-	uint id  = mid(raw);
+	uint id = imageLoad(tex_current, pos).r;
 
 	if (id == MAT_AIR || id == MAT_BEDROCK || id == NOT_LOADED) {
-		wrt(pos, raw);
+		wrt(pos, id);
 		return;
 	}
 
 	if (is_solid(id)) {
-		uint rx = react(pos, id, raw);
+		uint rx = react(pos, id);
 		if (rx != NO_REACTION) {
 			wrt(pos, rx);
 		} else {
-			wrt(pos, raw);
+			wrt(pos, id);
 		}
 		return;
 	}
 
 	if (is_gas(id))
-		sim_gas(pos, raw);
+		sim_gas(pos, id);
 	else if (is_fluid(id))
-		sim_fluid(pos, raw);
+		sim_fluid(pos, id);
 	else
-		wrt(pos, raw);
+		wrt(pos, id);
 }

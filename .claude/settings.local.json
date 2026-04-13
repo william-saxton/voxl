@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/personal-workspace/voxl/native/godot-cpp -name class_db* -type f)",
+      "Bash(wc -l /c/personal-workspace/voxl/native/src/*.cpp /c/personal-workspace/voxl/native/src/*.h)"
+    ]
+  }
+}

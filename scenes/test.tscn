@@ -1,0 +1,8 @@
+[gd_scene format=3 uid="uid://c5j0na4sh7dxg"]
+
+[ext_resource type="Material" uid="uid://co4ujn1xbi7hl" path="res://portal.tres" id="1_errlg"]
+
+[node name="Test" type="Node3D" unique_id=1105793873]
+
+[node name="CSGPolygon3D" type="CSGPolygon3D" parent="." unique_id=2025472437]
+material_override = ExtResource("1_errlg")

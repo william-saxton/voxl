@@ -3,7 +3,7 @@ extends Node
 
 const SIM_RATE := 0.05
 const SIM_X := 256
-const SIM_Y := 32
+const SIM_Y := 16
 const SIM_Z := 256
 const SHIFT_STEP := 64
 const SHIFT_MARGIN := 32
@@ -24,7 +24,6 @@ var _player: Node3D
 var _sim_origin := Vector3i.ZERO
 var _sim_timer: float = 0.0
 var _tick_count: int = 0
-var _source_positions: Dictionary = {}
 
 var _rd: RenderingDevice
 var _shader: RID
@@ -58,9 +57,6 @@ signal voxel_changed(pos: Vector3i, new_voxel: int)
 func get_active_cell_count() -> int:
 	return SIM_X * SIM_Y * SIM_Z if _gpu_ready else 0
 
-func get_source_block_count() -> int:
-	return _source_positions.size()
-
 func get_last_tick_ms() -> float:
 	return _last_tick_usec / 1000.0
 
@@ -76,32 +72,25 @@ func initialize(terrain: VoxelTerrain, player: Node3D = null) -> void:
 	_wait_for_terrain()
 
 
-func place_fluid(pos: Vector3i, fluid_base: int, level: int = MaterialRegistry.FLUID_LEVELS - 1) -> void:
+func place_fluid(pos: Vector3i, fluid_id: int) -> void:
 	if not _voxel_tool:
 		return
-	var fluid_id := MaterialRegistry.fluid_id(fluid_base, level)
 	_voxel_tool.set_voxel(pos, fluid_id)
-	_source_positions[pos] = true
 	if _gpu_ready:
-		_queue_gpu_write(pos, MaterialRegistry.encode_gpu(fluid_id, true))
+		_queue_gpu_write(pos, fluid_id)
 
 
 func remove_voxel(pos: Vector3i) -> void:
 	if not _voxel_tool:
 		return
 	_voxel_tool.set_voxel(pos, MaterialRegistry.AIR)
-	_source_positions.erase(pos)
 	if _gpu_ready:
 		_queue_gpu_write(pos, MaterialRegistry.AIR)
 
 
 func sync_voxel(pos: Vector3i, voxel_id: int) -> void:
 	if _gpu_ready:
-		_queue_gpu_write(pos, MaterialRegistry.encode_gpu(voxel_id, false))
-
-
-func _wake_region(_center: Vector3i, _radius: int) -> void:
-	pass
+		_queue_gpu_write(pos, voxel_id)
 
 
 # ── GPU setup ──
@@ -121,10 +110,12 @@ func _wait_for_terrain() -> void:
 func _snap_origin_to_player() -> Vector3i:
 	if _player:
 		var pp := _player.global_position
-		var cx := int(floorf(pp.x / SHIFT_STEP)) * SHIFT_STEP - SIM_X / 2
-		var cz := int(floorf(pp.z / SHIFT_STEP)) * SHIFT_STEP - SIM_Z / 2
-		return Vector3i(cx, -16, cz)
-	return Vector3i(-SIM_X / 2, -16, -SIM_Z / 2)
+		var vx := int(floorf(pp.x * MaterialRegistry.INV_VOXEL_SCALE))
+		var vz := int(floorf(pp.z * MaterialRegistry.INV_VOXEL_SCALE))
+		var cx := int(floorf(float(vx) / SHIFT_STEP)) * SHIFT_STEP - SIM_X / 2
+		var cz := int(floorf(float(vz) / SHIFT_STEP)) * SHIFT_STEP - SIM_Z / 2
+		return Vector3i(cx, 0, cz)
+	return Vector3i(-SIM_X / 2, 0, -SIM_Z / 2)
 
 
 func _setup_gpu() -> void:
@@ -159,7 +150,7 @@ func _setup_gpu() -> void:
 	_build_uniform_set()
 	_sync_terrain_to_gpu()
 	_gpu_ready = true
-	print("[MaterialSimulator] GPU sim ready (origin=%s, %d sources)" % [_sim_origin, _source_positions.size()])
+	print("[MaterialSimulator] GPU sim ready (origin=%s)" % [_sim_origin])
 
 
 func _create_textures() -> void:
@@ -223,9 +214,8 @@ func _sync_terrain_to_gpu() -> void:
 			for sx in SIM_X:
 				var world_pos := Vector3i(sx, sy, sz) + _sim_origin
 				var voxel := _voxel_tool.get_voxel(world_pos)
-				var is_src := _source_positions.has(world_pos)
 				var idx := sx + sy * SIM_X + sz * SIM_X * SIM_Y
-				data[idx] = MaterialRegistry.encode_gpu(voxel, is_src)
+				data[idx] = voxel
 				if voxel != MaterialRegistry.AIR:
 					non_air += 1
 
@@ -235,7 +225,7 @@ func _sync_terrain_to_gpu() -> void:
 	print("[MaterialSimulator] synced terrain: %d non-air voxels out of %d" % [non_air, SIM_X * SIM_Y * SIM_Z])
 
 
-# ── pending writes (batched per dispatch) ──
+# ── pending writes ──
 
 func _queue_gpu_write(world_pos: Vector3i, gpu_byte: int) -> void:
 	var sp := world_pos - _sim_origin
@@ -276,15 +266,15 @@ func _check_shift() -> void:
 	if not _player:
 		return
 	var pp := _player.global_position
-	var px := int(floorf(pp.x))
-	var pz := int(floorf(pp.z))
+	var vx := int(floorf(pp.x * MaterialRegistry.INV_VOXEL_SCALE))
+	var vz := int(floorf(pp.z * MaterialRegistry.INV_VOXEL_SCALE))
 
 	var edge_min_x := _sim_origin.x + SHIFT_MARGIN
 	var edge_max_x := _sim_origin.x + SIM_X - SHIFT_MARGIN
 	var edge_min_z := _sim_origin.z + SHIFT_MARGIN
 	var edge_max_z := _sim_origin.z + SIM_Z - SHIFT_MARGIN
 
-	if px >= edge_min_x and px < edge_max_x and pz >= edge_min_z and pz < edge_max_z:
+	if vx >= edge_min_x and vx < edge_max_x and vz >= edge_min_z and vz < edge_max_z:
 		return
 
 	var new_origin := _snap_origin_to_player()
@@ -343,7 +333,6 @@ func _shift_volume(new_origin: Vector3i) -> void:
 func _continue_edge_fill() -> void:
 	var t0 := Time.get_ticks_usec()
 	var budget_usec := 4000
-	var slice_size := SIM_X * SIM_Y
 
 	while _edge_fill_z < SIM_Z:
 		var nz := _edge_fill_z
@@ -361,8 +350,7 @@ func _continue_edge_fill() -> void:
 					var voxel := _voxel_tool.get_voxel(world_pos)
 					if voxel == MaterialRegistry.AIR:
 						continue
-					var is_src := _source_positions.has(world_pos)
-					_queue_gpu_write(world_pos, MaterialRegistry.encode_gpu(voxel, is_src))
+					_queue_gpu_write(world_pos, voxel)
 		else:
 			for ny in SIM_Y:
 				if _edge_fill_dx > 0:
@@ -371,16 +359,14 @@ func _continue_edge_fill() -> void:
 						var voxel := _voxel_tool.get_voxel(world_pos)
 						if voxel == MaterialRegistry.AIR:
 							continue
-						var is_src := _source_positions.has(world_pos)
-						_queue_gpu_write(world_pos, MaterialRegistry.encode_gpu(voxel, is_src))
+						_queue_gpu_write(world_pos, voxel)
 				else:
 					for nx in range(0, _edge_fill_nx_lo):
 						var world_pos := Vector3i(nx, ny, nz) + _sim_origin
 						var voxel := _voxel_tool.get_voxel(world_pos)
 						if voxel == MaterialRegistry.AIR:
 							continue
-						var is_src := _source_positions.has(world_pos)
-						_queue_gpu_write(world_pos, MaterialRegistry.encode_gpu(voxel, is_src))
+						_queue_gpu_write(world_pos, voxel)
 
 		if Time.get_ticks_usec() - t0 > budget_usec:
 			break

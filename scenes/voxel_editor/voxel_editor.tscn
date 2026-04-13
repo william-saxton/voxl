@@ -1,0 +1,615 @@
+[gd_scene format=3 uid="uid://c1u1mel8khu"]
+
+[ext_resource type="Script" uid="uid://bk7mk74i1hy12" path="res://scripts/voxel_editor/voxel_editor_main.gd" id="1"]
+[ext_resource type="Script" uid="uid://dnxjk651l41v7" path="res://scripts/voxel_editor/editor_camera.gd" id="2"]
+[ext_resource type="Script" uid="uid://c8sfyuhxogo1y" path="res://scripts/voxel_editor/tile_renderer.gd" id="3"]
+[ext_resource type="Script" uid="uid://bi5lhekresb70" path="res://scripts/voxel_editor/editor_grid.gd" id="4"]
+[ext_resource type="Script" uid="uid://cc8e7ssyffwfj" path="res://scripts/voxel_editor/hover_highlight.gd" id="6"]
+[ext_resource type="Texture2D" uid="uid://can4i3uo408bb" path="res://themes/icons/scale.svg" id="15_a1lhh"]
+[ext_resource type="Theme" uid="uid://cs3ou2klnmlgp" path="res://themes/voxl_editor_theme.tres" id="21_7s7we"]
+[ext_resource type="Texture2D" uid="uid://b4i3hhokcc6sg" path="res://themes/icons/add_box.svg" id="ico_add_box"]
+[ext_resource type="Texture2D" uid="uid://bekq0um615h2f" path="res://themes/icons/brush.svg" id="ico_brush"]
+[ext_resource type="Texture2D" uid="uid://ywsrqdh23glj" path="res://themes/icons/category.svg" id="ico_category"]
+[ext_resource type="Texture2D" uid="uid://c7h6ecimygfsb" path="res://themes/icons/flip.svg" id="ico_flip"]
+[ext_resource type="Texture2D" uid="uid://cb0ervacb4kud" path="res://themes/icons/flood.svg" id="ico_flood"]
+[ext_resource type="Texture2D" uid="uid://b0ox66a3i4hoe" path="res://themes/icons/hollow.svg" id="ico_hollow"]
+[ext_resource type="Texture2D" uid="uid://3vecxlawxpur" path="res://themes/icons/mirror.svg" id="ico_mirror"]
+[ext_resource type="Texture2D" uid="uid://cp7i1in6nxm1c" path="res://themes/icons/move.svg" id="ico_move"]
+[ext_resource type="Texture2D" uid="uid://bycmpwj5p057q" path="res://themes/icons/rotate.svg" id="ico_rotate"]
+[ext_resource type="Texture2D" uid="uid://dmp78ktits0c1" path="res://themes/icons/select_all.svg" id="ico_select_all"]
+[ext_resource type="Texture2D" uid="uid://n8blcyncassd" path="res://themes/icons/settings.svg" id="ico_settings"]
+[ext_resource type="Texture2D" uid="uid://dh76mcw3xug8p" path="res://themes/icons/indeterminate_check_box.svg" id="ico_subtract"]
+[ext_resource type="PackedScene" path="res://scenes/voxel_editor/settings_dialog.tscn" id="settings_dialog"]
+
+[sub_resource type="StyleBoxFlat" id="menu_container_style"]
+bg_color = Color(0.13, 0.122, 0.148, 1)
+border_width_bottom = 1
+border_color = Color(0.23, 0.21, 0.25, 1)
+
+[sub_resource type="StyleBoxFlat" id="menu_item_normal"]
+bg_color = Color(0, 0, 0, 0)
+
+[sub_resource type="StyleBoxFlat" id="menu_item_pressed"]
+bg_color = Color(0.17, 0.16, 0.19, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="menu_item_hover"]
+bg_color = Color(0.17, 0.16, 0.19, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="Environment" id="env_1"]
+background_mode = 1
+background_color = Color(0.11, 0.107, 0.122, 1)
+ambient_light_source = 1
+ambient_light_color = Color(0.75, 0.75, 0.8, 1)
+ambient_light_energy = 0.8
+
+[node name="VoxelEditor" type="Control" unique_id=929189074]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme = ExtResource("21_7s7we")
+script = ExtResource("1")
+
+[node name="MainVBox" type="VBoxContainer" parent="." unique_id=209943931]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="TopSection" type="VBoxContainer" parent="MainVBox" unique_id=938969687]
+layout_mode = 2
+
+[node name="MenuBarContainer" type="PanelContainer" parent="MainVBox/TopSection" unique_id=193706943]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("menu_container_style")
+
+[node name="MenuBar" type="MenuBar" parent="MainVBox/TopSection/MenuBarContainer" unique_id=193706944]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.88, 0.9, 1)
+theme_override_colors/font_pressed_color = Color(0.49, 0.298, 1, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_colors/font_focus_color = Color(0.9, 0.88, 0.9, 1)
+theme_override_styles/normal = SubResource("menu_item_normal")
+theme_override_styles/pressed = SubResource("menu_item_pressed")
+theme_override_styles/hover = SubResource("menu_item_hover")
+
+[node name="ContextBar" type="PanelContainer" parent="MainVBox/TopSection" unique_id=2059130980]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+
+[node name="ContextHBox" type="HBoxContainer" parent="MainVBox/TopSection/ContextBar" unique_id=245350288]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="ContextLabel" type="Label" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=1885449661]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.6, 0.64, 1)
+text = "BRUSH:"
+
+[node name="BrushSizeLabel" type="Label" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=717351575]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.6, 0.64, 1)
+text = "Size:"
+
+[node name="BrushSizeSpin" type="SpinBox" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=114864031]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 16.0
+value = 1.0
+
+[node name="BrushFlatCheck" type="CheckBox" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=1602230327]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Flat"
+
+[node name="HollowCheck" type="CheckBox" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=1614442762]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Hollow (H)"
+
+[node name="SidesLabel" type="Label" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=1920357963]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.6, 0.64, 1)
+text = "Sides:"
+
+[node name="PolygonSidesSpin" type="SpinBox" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=1864894096]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+min_value = 3.0
+max_value = 32.0
+value = 6.0
+
+[node name="QuerySeparator" type="VSeparator" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=1175554952]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="FaceCheck" type="CheckBox" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=1462552587]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Face (Q)"
+
+[node name="ColorCheck" type="CheckBox" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=57438672]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Color"
+
+[node name="MaterialCheck" type="CheckBox" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=2131223338]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Material"
+
+[node name="RangeLabel" type="Label" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=2018397190]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.6, 0.64, 1)
+text = "Range:"
+
+[node name="RangeSlider" type="HSlider" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=90692590]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(80, 0)
+layout_mode = 2
+min_value = 4.0
+max_value = 128.0
+step = 4.0
+value = 64.0
+
+[node name="WrapCheck" type="CheckBox" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=743049628]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Wrap"
+
+[node name="GeoBtn" type="Button" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=263827979]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Select by geometry (any non-air connected)"
+toggle_mode = true
+text = "Geometry"
+
+[node name="MatBtn" type="Button" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=1294968209]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Select by material type"
+toggle_mode = true
+text = "Material"
+
+[node name="ColBtn" type="Button" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=1164168329]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Select by color (visual variant)"
+toggle_mode = true
+text = "Color"
+
+[node name="SelectBrushSizeLabel" type="Label" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=1538621918]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.6, 0.64, 1)
+text = "Size:"
+
+[node name="SelectBrushSizeSpin" type="SpinBox" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=559057981]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 16.0
+value = 1.0
+
+[node name="ContextSpacer" type="Control" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=797533348]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="SelectionCount" type="Label" parent="MainVBox/TopSection/ContextBar/ContextHBox" unique_id=1530745664]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.6, 0.64, 1)
+text = "Selection: 0"
+
+[node name="ContentHBox" type="HBoxContainer" parent="MainVBox" unique_id=1915969129]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="LeftSidebar" type="PanelContainer" parent="MainVBox/ContentHBox" unique_id=1349884488]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(112, 0)
+layout_mode = 2
+
+[node name="SidebarRoot" type="VBoxContainer" parent="MainVBox/ContentHBox/LeftSidebar" unique_id=340680765]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="ToolsHeader" type="Label" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot" unique_id=10738052]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.6, 0.64, 1)
+theme_override_font_sizes/font_size = 14
+text = "TOOLS"
+horizontal_alignment = 1
+
+[node name="ToolColumns" type="HBoxContainer" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot" unique_id=1119833423]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="MainToolsCol" type="VBoxContainer" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/ToolColumns" unique_id=1906659593]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="BtnAdd" type="Button" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/ToolColumns/MainToolsCol" unique_id=1203877517]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 36)
+layout_mode = 2
+tooltip_text = "Add (B)"
+toggle_mode = true
+icon = ExtResource("ico_add_box")
+icon_alignment = 1
+expand_icon = true
+
+[node name="BtnSubtract" type="Button" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/ToolColumns/MainToolsCol" unique_id=1616562605]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 36)
+layout_mode = 2
+tooltip_text = "Sub (E)"
+toggle_mode = true
+icon = ExtResource("ico_subtract")
+icon_alignment = 1
+expand_icon = true
+
+[node name="BtnPaint" type="Button" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/ToolColumns/MainToolsCol" unique_id=253169456]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 36)
+layout_mode = 2
+tooltip_text = "Paint (P)"
+toggle_mode = true
+icon = ExtResource("ico_brush")
+icon_alignment = 1
+expand_icon = true
+
+[node name="BtnSelect" type="Button" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/ToolColumns/MainToolsCol" unique_id=2090593835]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 36)
+layout_mode = 2
+tooltip_text = "Select (S)"
+toggle_mode = true
+icon = ExtResource("ico_select_all")
+icon_alignment = 1
+expand_icon = true
+
+[node name="BtnSpawns" type="Button" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/ToolColumns/MainToolsCol" unique_id=254981992]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 36)
+layout_mode = 2
+tooltip_text = "Spawns (K)"
+toggle_mode = true
+icon = ExtResource("ico_category")
+icon_alignment = 1
+expand_icon = true
+
+[node name="VSeparator" type="VSeparator" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/ToolColumns" unique_id=1866366035]
+layout_mode = 2
+
+[node name="SubToolsVBox" type="VBoxContainer" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/ToolColumns" unique_id=2146612606]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="SymSeparator2" type="HSeparator" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot" unique_id=1758385489]
+layout_mode = 2
+
+[node name="SidebarSpacer" type="Control" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot" unique_id=1433947394]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="SymSeparator" type="HSeparator" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot" unique_id=1749093545]
+layout_mode = 2
+
+[node name="SymRow" type="HBoxContainer" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot" unique_id=996645117]
+layout_mode = 2
+theme_override_constants/separation = 2
+alignment = 1
+
+[node name="BtnSymX" type="Button" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/SymRow" unique_id=1224771780]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(30, 28)
+layout_mode = 2
+tooltip_text = "Mirror across X axis"
+toggle_mode = true
+text = "X"
+
+[node name="BtnSymY" type="Button" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/SymRow" unique_id=240408949]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(30, 28)
+layout_mode = 2
+tooltip_text = "Mirror across Y axis"
+toggle_mode = true
+text = "Y"
+
+[node name="BtnSymZ" type="Button" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/SymRow" unique_id=589827544]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(30, 28)
+layout_mode = 2
+tooltip_text = "Mirror across Z axis"
+toggle_mode = true
+text = "Z"
+
+[node name="MirrorRow" type="HBoxContainer" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot" unique_id=1450385830]
+layout_mode = 2
+theme_override_constants/separation = 2
+alignment = 1
+
+[node name="BtnMirrorPlace" type="Button" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/MirrorRow" unique_id=2119465004]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 0)
+layout_mode = 2
+tooltip_text = "Click a face to place custom mirror plane"
+text = "Place"
+
+[node name="BtnMirrorClear" type="Button" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot/MirrorRow" unique_id=1426980516]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 0)
+layout_mode = 2
+tooltip_text = "Remove all custom mirror planes"
+text = "Clear"
+
+[node name="BtnSettings" type="Button" parent="MainVBox/ContentHBox/LeftSidebar/SidebarRoot" unique_id=992337221]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+tooltip_text = "Settings"
+icon = ExtResource("ico_settings")
+icon_alignment = 1
+expand_icon = true
+
+[node name="ViewportContainer" type="SubViewportContainer" parent="MainVBox/ContentHBox" unique_id=1749446005]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+stretch = true
+
+[node name="EditorViewport" type="SubViewport" parent="MainVBox/ContentHBox/ViewportContainer" unique_id=2068472496]
+unique_name_in_owner = true
+own_world_3d = true
+handle_input_locally = false
+size = Vector2i(969, 543)
+render_target_update_mode = 4
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="MainVBox/ContentHBox/ViewportContainer/EditorViewport" unique_id=239493382]
+environment = SubResource("env_1")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="MainVBox/ContentHBox/ViewportContainer/EditorViewport" unique_id=1806303926]
+transform = Transform3D(0.866, -0.354, 0.354, 0, 0.707, 0.707, -0.5, -0.612, 0.612, 50, 80, 50)
+shadow_enabled = true
+
+[node name="CameraPivot" type="Node3D" parent="MainVBox/ContentHBox/ViewportContainer/EditorViewport" unique_id=1749880553]
+unique_name_in_owner = true
+script = ExtResource("2")
+
+[node name="Camera3D" type="Camera3D" parent="MainVBox/ContentHBox/ViewportContainer/EditorViewport/CameraPivot" unique_id=953677359]
+far = 1000.0
+
+[node name="TileRenderer" type="Node3D" parent="MainVBox/ContentHBox/ViewportContainer/EditorViewport" unique_id=821183424]
+unique_name_in_owner = true
+script = ExtResource("3")
+
+[node name="EditorGrid" type="Node3D" parent="MainVBox/ContentHBox/ViewportContainer/EditorViewport" unique_id=697068004]
+unique_name_in_owner = true
+script = ExtResource("4")
+
+[node name="HoverHighlight" type="MeshInstance3D" parent="MainVBox/ContentHBox/ViewportContainer/EditorViewport" unique_id=371255246]
+unique_name_in_owner = true
+script = ExtResource("6")
+
+[node name="TransformBar" type="PanelContainer" parent="MainVBox/ContentHBox" unique_id=1575602970]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(52, 0)
+layout_mode = 2
+
+[node name="XformRoot" type="VBoxContainer" parent="MainVBox/ContentHBox/TransformBar" unique_id=1128619860]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="XformHeader" type="Label" parent="MainVBox/ContentHBox/TransformBar/XformRoot" unique_id=1868507358]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.6, 0.64, 1)
+theme_override_font_sizes/font_size = 11
+text = "Transform"
+horizontal_alignment = 1
+
+[node name="BtnMove" type="Button" parent="MainVBox/ContentHBox/TransformBar/XformRoot" unique_id=698067226]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 30)
+layout_mode = 2
+tooltip_text = "Move"
+icon = ExtResource("ico_move")
+icon_alignment = 1
+expand_icon = true
+
+[node name="XformSep1" type="HSeparator" parent="MainVBox/ContentHBox/TransformBar/XformRoot" unique_id=749064989]
+layout_mode = 2
+
+[node name="BtnRotate" type="Button" parent="MainVBox/ContentHBox/TransformBar/XformRoot" unique_id=2060554977]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 30)
+layout_mode = 2
+tooltip_text = "Rotate"
+icon = ExtResource("ico_rotate")
+icon_alignment = 1
+expand_icon = true
+
+[node name="RotatePopup" type="PopupMenu" parent="MainVBox/ContentHBox/TransformBar/XformRoot/BtnRotate" unique_id=1317730761]
+unique_name_in_owner = true
+
+[node name="BtnScale" type="Button" parent="MainVBox/ContentHBox/TransformBar/XformRoot" unique_id=857867812]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 30)
+layout_mode = 2
+tooltip_text = "Scale"
+icon = ExtResource("15_a1lhh")
+icon_alignment = 1
+expand_icon = true
+
+[node name="ScalePopup" type="PopupMenu" parent="MainVBox/ContentHBox/TransformBar/XformRoot/BtnScale" unique_id=1591981779]
+unique_name_in_owner = true
+
+[node name="BtnFlip" type="Button" parent="MainVBox/ContentHBox/TransformBar/XformRoot" unique_id=964382157]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 30)
+layout_mode = 2
+tooltip_text = "Flip"
+icon = ExtResource("ico_flip")
+icon_alignment = 1
+expand_icon = true
+
+[node name="FlipPopup" type="PopupMenu" parent="MainVBox/ContentHBox/TransformBar/XformRoot/BtnFlip" unique_id=2058355264]
+unique_name_in_owner = true
+
+[node name="BtnMirrorXform" type="Button" parent="MainVBox/ContentHBox/TransformBar/XformRoot" unique_id=2031325077]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 30)
+layout_mode = 2
+tooltip_text = "Mirror"
+icon = ExtResource("ico_mirror")
+icon_alignment = 1
+expand_icon = true
+
+[node name="MirrorXformPopup" type="PopupMenu" parent="MainVBox/ContentHBox/TransformBar/XformRoot/BtnMirrorXform" unique_id=190125832]
+unique_name_in_owner = true
+
+[node name="XformSep2" type="HSeparator" parent="MainVBox/ContentHBox/TransformBar/XformRoot" unique_id=160576711]
+layout_mode = 2
+
+[node name="BtnHollow" type="Button" parent="MainVBox/ContentHBox/TransformBar/XformRoot" unique_id=237362593]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 30)
+layout_mode = 2
+tooltip_text = "Hollow"
+icon = ExtResource("ico_hollow")
+icon_alignment = 1
+expand_icon = true
+
+[node name="BtnFlood" type="Button" parent="MainVBox/ContentHBox/TransformBar/XformRoot" unique_id=1670421198]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 30)
+layout_mode = 2
+tooltip_text = "Flood"
+icon = ExtResource("ico_flood")
+icon_alignment = 1
+expand_icon = true
+
+[node name="BtnDilate" type="Button" parent="MainVBox/ContentHBox/TransformBar/XformRoot" unique_id=1117725683]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 30)
+layout_mode = 2
+tooltip_text = "Dilate"
+
+[node name="BtnErode" type="Button" parent="MainVBox/ContentHBox/TransformBar/XformRoot" unique_id=34462849]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 30)
+layout_mode = 2
+tooltip_text = "Erode"
+
+[node name="RightPanel" type="PanelContainer" parent="MainVBox/ContentHBox" unique_id=1575602969]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 0)
+layout_mode = 2
+
+[node name="RightVBox" type="VBoxContainer" parent="MainVBox/ContentHBox/RightPanel" unique_id=494899616]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="BottomSection" type="VBoxContainer" parent="MainVBox" unique_id=1692852356]
+layout_mode = 2
+
+[node name="ControlsBar" type="PanelContainer" parent="MainVBox/BottomSection" unique_id=1142336272]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+
+[node name="ControlsHBox" type="HBoxContainer" parent="MainVBox/BottomSection/ControlsBar" unique_id=1000813613]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="ControlsLabel" type="Label" parent="MainVBox/BottomSection/ControlsBar/ControlsHBox" unique_id=132589457]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.6, 0.64, 1)
+theme_override_font_sizes/font_size = 11
+text = "CONTROLS"
+
+[node name="SliceRow" type="HBoxContainer" parent="MainVBox/BottomSection/ControlsBar/ControlsHBox" unique_id=482271779]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="YSliceLabel" type="Label" parent="MainVBox/BottomSection/ControlsBar/ControlsHBox/SliceRow" unique_id=730365756]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.6, 0.64, 1)
+theme_override_font_sizes/font_size = 11
+text = "Y-SLICE"
+
+[node name="YSliceSlider" type="HSlider" parent="MainVBox/BottomSection/ControlsBar/ControlsHBox/SliceRow" unique_id=1182182054]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+max_value = 112.0
+
+[node name="SliceVal" type="Label" parent="MainVBox/BottomSection/ControlsBar/ControlsHBox/SliceRow" unique_id=497988606]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.878, 0.9, 1)
+text = "off"
+
+[node name="ControlsSpacer" type="Control" parent="MainVBox/BottomSection/ControlsBar/ControlsHBox" unique_id=504050593]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="StatusBar" type="PanelContainer" parent="MainVBox/BottomSection" unique_id=1998453771]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+
+[node name="StatusHBox" type="HBoxContainer" parent="MainVBox/BottomSection/StatusBar" unique_id=1467533484]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="StatusLabel" type="Label" parent="MainVBox/BottomSection/StatusBar/StatusHBox" unique_id=506147068]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.62, 0.6, 0.64, 1)
+theme_override_font_sizes/font_size = 11
+text = "VOXL v1.0 | Ready"
+
+[node name="StatsLabel" type="Label" parent="MainVBox/BottomSection/StatusBar/StatusHBox" unique_id=2126079655]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.6, 0.64, 1)
+theme_override_font_sizes/font_size = 11
+horizontal_alignment = 2
+
+[node name="SettingsDialog" parent="." unique_id=1865486060 instance=ExtResource("settings_dialog")]
+unique_name_in_owner = true
+oversampling_override = 1.0
+position = Vector2i(0, 36)
+size = Vector2i(400, 500)
+theme = ExtResource("21_7s7we")
