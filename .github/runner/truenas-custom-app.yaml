@@ -1,0 +1,17 @@
+services:
+  runner:
+    image: ghcr.io/william-saxton/voxl-claude-runner:latest
+    container_name: voxl-claude-runner
+    restart: unless-stopped
+    environment:
+      # Replace <YOUR_GITHUB_PAT> with your actual token before pasting
+      - GITHUB_TOKEN=<YOUR_GITHUB_PAT>
+      - GITHUB_REPOSITORY=william-saxton/voxl
+      - RUNNER_NAME=voxl-truenas
+    volumes:
+      - runner-work:/home/runner/actions-runner/_work
+      - claude-config:/home/runner/.claude
+
+volumes:
+  runner-work:
+  claude-config:
