@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     curl wget unzip git jq sudo \
     python3 python3-pip \
-    build-essential gcc g++ pkg-config \
+    build-essential gcc g++ pkg-config mingw-w64 \
     libx11-dev libxcursor-dev libxinerama-dev libxrandr-dev libxi-dev \
     libgl1-mesa-dev libasound2-dev libpulse-dev libfreetype6-dev \
     libssl-dev libfontconfig1-dev \

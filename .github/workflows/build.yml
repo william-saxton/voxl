@@ -38,6 +38,8 @@ jobs:
           path: |
             native/godot-cpp/bin
             native/godot-cpp/gen
+            native/godot-cpp/.sconsign.dblite
+            native/.sconsign.dblite
           key: godotcpp-linux-release-${{ hashFiles('.gitmodules', 'native/godot-cpp/SConstruct') }}
 
       - name: Touch cached godot-cpp files (Linux)
@@ -62,80 +64,43 @@ jobs:
           mkdir -p build
           godot --headless --export-release "Linux" build/VOXL.x86_64
 
-  # ── Windows: native lib + Godot export (GitHub-hosted runner) ──────────
+  # ── Windows: cross-compile native lib + Godot export (self-hosted Linux) ──
   build-windows:
-    runs-on: windows-latest
+    runs-on: [self-hosted, linux, x64]
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install SCons
-        run: pip install scons
-
-      - name: Cache godot-cpp build (Windows)
+      - name: Cache godot-cpp build (Windows cross-compile)
         id: cache-godotcpp-windows
         uses: actions/cache@v4
         with:
           path: |
             native/godot-cpp/bin
             native/godot-cpp/gen
-          key: godotcpp-windows-release-${{ hashFiles('.gitmodules', 'native/godot-cpp/SConstruct') }}
+            native/godot-cpp/.sconsign.dblite
+            native/.sconsign.dblite
+          key: godotcpp-mingw-release-${{ hashFiles('.gitmodules', 'native/godot-cpp/SConstruct') }}
 
-      - name: Touch cached godot-cpp files (Windows)
+      - name: Touch cached godot-cpp files (Windows cross-compile)
         if: steps.cache-godotcpp-windows.outputs.cache-hit == 'true'
-        shell: bash
         run: |
           find native/godot-cpp/gen -type f -exec touch {} +
           find native/godot-cpp/bin -type f -exec touch {} +
 
-      - name: Build native library (Windows release)
-        shell: bash
+      - name: Build native library (Windows cross-compile)
         run: |
           cd native
-          scons platform=windows target=template_release -j${NUMBER_OF_PROCESSORS:-4}
+          scons platform=windows use_mingw=yes target=template_release -j$(nproc)
 
       - name: Verify native library
-        run: |
-          if (!(Test-Path "bin\libvoxl_native.windows.template_release.x86_64.dll")) {
-            throw "Native library not found"
-          }
-
-      - name: Cache Godot + templates (Windows)
-        id: cache-godot-windows
-        uses: actions/cache@v4
-        with:
-          path: |
-            godot-bin
-            ~/AppData/Roaming/Godot/export_templates/4.6.stable
-          key: godot-windows-4.6-stable
-
-      - name: Download Godot
-        if: steps.cache-godot-windows.outputs.cache-hit != 'true'
-        run: |
-          $version = "4.6-stable"
-          Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/$version/Godot_v${version}_win64.exe.zip" -OutFile godot.zip
-          Expand-Archive godot.zip -DestinationPath godot-bin
-          Move-Item "godot-bin\Godot_v${version}_win64.exe" "godot-bin\godot.exe"
-
-      - name: Download Godot export templates
-        if: steps.cache-godot-windows.outputs.cache-hit != 'true'
-        run: |
-          $version = "4.6-stable"
-          Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/$version/Godot_v${version}_export_templates.tpz" -OutFile templates.zip
-          $templateDir = "$env:APPDATA\Godot\export_templates\4.6.stable"
-          New-Item -ItemType Directory -Force -Path $templateDir
-          Expand-Archive templates.zip -DestinationPath templates-tmp
-          Move-Item "templates-tmp\templates\*" $templateDir
+        run: test -f bin/libvoxl_native.windows.template_release.x86_64.dll
 
       - name: Import Godot project
-        run: godot-bin\godot.exe --headless --import
+        run: godot --headless --import
 
       - name: Export Windows build
         run: |
-          New-Item -ItemType Directory -Force -Path build
-          godot-bin\godot.exe --headless --export-release "Windows Desktop" build\VOXL.exe
+          mkdir -p build
+          godot --headless --export-release "Windows Desktop" build/VOXL.exe
