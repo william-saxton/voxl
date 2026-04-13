@@ -111,6 +111,7 @@ var _import_scene_dialog: FileDialog
 var _sync_config_dialog: SyncConfigDialog
 var _remote_browser: RemoteBrowserDialog
 var _remote_status_label: Label
+var _native_status_label: Label
 
 
 func _ready() -> void:
@@ -833,6 +834,21 @@ func _setup_bottom_bar() -> void:
 	_y_slice_slider = %YSliceSlider
 	_status_label = %StatusLabel
 	_stats_label = %StatsLabel
+
+	# Native extension status indicator
+	_native_status_label = Label.new()
+	_native_status_label.add_theme_font_size_override("font_size", 11)
+	if _tool_manager.native_loaded:
+		_native_status_label.text = "C++: Loaded"
+		_native_status_label.add_theme_color_override("font_color", Color(0.4, 0.8, 0.4))
+	else:
+		_native_status_label.text = "C++: GDScript fallback"
+		_native_status_label.add_theme_color_override("font_color", Color(1.0, 0.6, 0.2))
+	var status_bar: PanelContainer = %StatusBar
+	if status_bar:
+		var hbox := status_bar.get_child(0) if status_bar.get_child_count() > 0 else null
+		if hbox is HBoxContainer:
+			hbox.add_child(_native_status_label)
 
 	# Wire signals
 	_y_slice_slider.value_changed.connect(_on_y_slice_changed)

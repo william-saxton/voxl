@@ -14,7 +14,7 @@ enum Connectivity {
 }
 
 const DEFAULT_RANGE := 64
-const MAX_FILL_VOXELS := 10000
+const MAX_FILL_VOXELS := 100000
 const NEIGHBORS_6: Array[Vector3i] = [
 	Vector3i(1, 0, 0), Vector3i(-1, 0, 0),
 	Vector3i(0, 1, 0), Vector3i(0, -1, 0),

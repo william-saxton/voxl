@@ -84,6 +84,16 @@ func get_preview() -> Array[Vector3i]:
 	return _on_get_preview()
 
 
+## Get only surface voxels for preview rendering.
+## During height phase, returns caps + walls instead of the full extruded volume.
+func get_surface_preview() -> Array[Vector3i]:
+	if not active:
+		return []
+	if phase == 2:
+		return _extrude_surface_only(_base_positions, _height)
+	return _on_get_preview()
+
+
 ## Cancel the current gesture without applying.
 func cancel() -> void:
 	active = false
@@ -121,6 +131,58 @@ func _extrude_positions(base: Array[Vector3i], height: int) -> Array[Vector3i]:
 		return result
 	# 3D hollow: keep only positions that have at least one missing 6-neighbor
 	return _apply_3d_hollow(result)
+
+
+## Return only the surface voxels of an extruded shape: bottom cap + top cap + perimeter walls.
+## Avoids generating every interior voxel just for preview rendering.
+func _extrude_surface_only(base: Array[Vector3i], height: int) -> Array[Vector3i]:
+	if height == 0:
+		if not hollow:
+			return base.duplicate()
+		return _apply_2d_hollow(base)
+
+	# Build set of base positions for perimeter detection
+	var base_set := {}
+	for p in base:
+		base_set[p] = true
+
+	# Find perimeter: base voxels with at least one missing neighbor on the plane
+	var plane_dirs: Array[Vector3i] = []
+	for n in [Vector3i(1,0,0), Vector3i(-1,0,0), Vector3i(0,1,0), Vector3i(0,-1,0), Vector3i(0,0,1), Vector3i(0,0,-1)]:
+		if n != face_normal and n != -face_normal:
+			plane_dirs.append(n)
+
+	var perimeter: Array[Vector3i] = []
+	for p in base:
+		for d in plane_dirs:
+			if not base_set.has(p + d):
+				perimeter.append(p)
+				break
+
+	var dir := 1 if height > 0 else -1
+	var count := absi(height) + 1
+	var result: Array[Vector3i] = []
+
+	if hollow:
+		# Hollow: only the perimeter at every layer (no caps)
+		for layer in count:
+			var offset := face_normal * (layer * dir)
+			for p in perimeter:
+				result.append(p + offset)
+	else:
+		# Bottom cap (all base positions)
+		result.append_array(base)
+		# Top cap (all base positions offset to top)
+		var top_offset := face_normal * (height)
+		for p in base:
+			result.append(p + top_offset)
+		# Walls: perimeter at intermediate layers only
+		for layer in range(1, count - 1):
+			var offset := face_normal * (layer * dir)
+			for p in perimeter:
+				result.append(p + offset)
+
+	return result
 
 
 func _apply_2d_hollow(positions: Array[Vector3i]) -> Array[Vector3i]:
