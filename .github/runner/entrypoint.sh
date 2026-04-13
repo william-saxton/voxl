@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+# ── Fix volume permissions ──
+# Docker volumes mount as root; the runner process needs ownership
+sudo chown -R runner:runner /home/runner/actions-runner/_work 2>/dev/null || true
+sudo chown -R runner:runner /home/runner/.claude 2>/dev/null || true
+
 # ── Check Claude auth ──
 if [ ! -d "$HOME/.claude" ] || [ -z "$(ls -A $HOME/.claude 2>/dev/null)" ]; then
   echo ""
