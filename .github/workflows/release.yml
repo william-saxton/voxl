@@ -73,9 +73,10 @@ jobs:
         run: pip install scons
 
       - name: Build native library (Windows release)
+        shell: bash
         run: |
           cd native
-          scons platform=windows target=template_release -j$env:NUMBER_OF_PROCESSORS
+          scons platform=windows target=template_release -j${NUMBER_OF_PROCESSORS:-4}
 
       - name: Verify native library
         run: |
