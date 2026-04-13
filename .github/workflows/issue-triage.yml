@@ -1,0 +1,72 @@
+name: Issue Triage & Auto-Fix
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  triage:
+    name: Triage with Claude Code
+    runs-on: [self-hosted, claude]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Triage issue with Claude
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+        run: |
+          claude -p --allowedTools 'Bash(git *)' 'Bash(cd native && scons *)' 'Bash(godot --headless *)' 'Bash(gh issue *)' 'Bash(gh pr *)' 'Bash(gh label *)' 'Bash(mkdir *)' 'Read' 'Edit' 'Write' 'Glob' 'Grep' <<'PROMPT'
+          You are triaging a new GitHub issue for the VOXL project — a Godot 4.6 voxel
+          terrain/physics simulation with a C++ GDExtension.
+
+          ## Issue #${ISSUE_NUMBER}
+          **Title:** ${ISSUE_TITLE}
+          **Author:** ${ISSUE_AUTHOR}
+          **Body:**
+          ${ISSUE_BODY}
+
+          ## Your task
+
+          1. **Analyze the issue.** Read the codebase to understand whether this is:
+             - A bug with a clear fix
+             - A feature request that is small and self-contained
+             - Something too complex, vague, or risky to auto-fix
+
+          2. **Label the issue** using `gh issue edit`. Apply appropriate labels:
+             - `bug` or `enhancement`
+             - `good-first-issue` if it is simple
+             - `claude-can-fix` if you are confident you can fix it
+             - `needs-human` if it requires human judgment or is too complex
+             Create any labels that don't exist yet with `gh label create`.
+
+          3. **If you can fix it (`claude-can-fix`):**
+             - Create a branch: `git checkout -b claude/fix-issue-${ISSUE_NUMBER}`
+             - Implement the fix
+             - Build the native library to verify:
+               `cd native && scons platform=linux target=template_debug -j$(nproc)`
+             - Run `godot --headless --import` to verify the project still imports cleanly
+             - Commit, push, and create a PR with `gh pr create` linking `Fixes #${ISSUE_NUMBER}`
+             - Comment on the issue explaining what you did
+
+          4. **If you cannot fix it:**
+             - Comment on the issue (via `gh issue comment`) with your analysis:
+               what part of the codebase is relevant, likely cause, and what to look at
+             - Apply the `needs-human` label
+
+          ## Project structure
+          - GDScript source: scripts/
+          - C++ native extension: native/src/
+          - Godot scenes: scenes/
+          - Shaders: shaders/
+          - Build: SCons (native/SConstruct) → outputs to bin/
+
+          Be conservative — only attempt a fix if you are confident it is correct.
+          PROMPT

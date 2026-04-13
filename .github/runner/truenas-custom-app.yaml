@@ -1,0 +1,25 @@
+services:
+  # One-time: log in to GHCR so TrueNAS can pull the private image.
+  # From TrueNAS shell, run:
+  #   docker login ghcr.io -u william-saxton -p <YOUR_GITHUB_PAT>
+  # Docker stores the credential and it persists across pulls.
+  runner:
+    image: ghcr.io/william-saxton/voxl-claude-runner:latest
+    container_name: voxl-claude-runner
+    restart: unless-stopped
+    environment:
+      # Required: GitHub PAT with 'repo' and 'read:packages' scope
+      # Set via TrueNAS UI: Apps > Custom App > Environment Variables
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_REPOSITORY=william-saxton/voxl
+      - RUNNER_NAME=voxl-truenas
+    volumes:
+      # TrueNAS ix-volumes — managed automatically, persist across restarts
+      # Runner work directory
+      - runner-work:/home/runner/actions-runner/_work
+      # Claude auth — persists subscription login across container restarts
+      - claude-config:/home/runner/.claude
+
+volumes:
+  runner-work:
+  claude-config:
