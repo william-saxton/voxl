@@ -94,6 +94,7 @@ var _proc_pending_max := Vector3i.ZERO
 var _proc_dirty := false
 var _proc_skip := 0  ## Frame counter — skip N frames between shader runs
 var _proc_native: RefCounted  ## VoxelEditorNative for C++ shape preview
+var native_loaded := false  ## True if VoxelEditorNative C++ extension loaded successfully
 ## Maps preset name → C++ shape ID. Must match ProceduralShape enum order in C++.
 var _proc_shape_ids: Dictionary = {}
 var _proc_preview_instance: MeshInstance3D  ## Dedicated mesh instance for procedural preview
@@ -199,6 +200,7 @@ func initialize(editor_main: VoxelEditorMain, viewport: SubViewport,
 	# Init C++ procedural shape support
 	if ClassDB.class_exists(&"VoxelEditorNative"):
 		_proc_native = ClassDB.instantiate(&"VoxelEditorNative")
+		native_loaded = _proc_native != null
 	# Build preset name → shape ID mapping (must match C++ enum order)
 	var shape_id := 0
 	for preset_name in ProceduralTool.PRESETS:
@@ -527,7 +529,7 @@ func _update_hover() -> void:
 				_highlight.visible = false
 				var brush_preview := (current_shape as BrushShape)._generate_brush(drag_pos)
 				_shape_preview.set_preview_color(current_mode)
-				_shape_preview.update_positions(brush_preview)
+				_shape_preview.update_surface(brush_preview)
 			elif _highlight:
 				_highlight.visible = true
 				_highlight.set_voxel_pos(drag_pos)
@@ -565,7 +567,7 @@ func _update_hover() -> void:
 				if symmetry.has_any_symmetry():
 					all_positions = _expand_with_symmetry(brush_positions)
 				_shape_preview.set_preview_color(current_mode)
-				_shape_preview.update_positions(all_positions)
+				_shape_preview.update_surface(all_positions)
 			else:
 				_highlight.visible = true
 				_highlight.set_voxel_pos(hover_pos)
@@ -966,7 +968,7 @@ func _handle_extrude_click(tile: WFCTileDef, _palette: VoxelPalette,
 		# Show initial preview
 		if _shape_preview:
 			_shape_preview.set_preview_color(current_mode)
-			_shape_preview.update_positions(extrude_tool.get_preview(current_mode))
+			_shape_preview.update_surface(extrude_tool.get_preview(current_mode))
 
 
 func _handle_extrude_release(tile: WFCTileDef, palette: VoxelPalette) -> void:
@@ -999,7 +1001,7 @@ func handle_viewport_drag(event: InputEventMouseMotion) -> void:
 	extrude_tool.update_drag(event.position.y)
 	if _shape_preview:
 		_shape_preview.set_preview_color(current_mode)
-		_shape_preview.update_positions(extrude_tool.get_preview(current_mode))
+		_shape_preview.update_surface(extrude_tool.get_preview(current_mode))
 
 
 func _apply_subtract_single(tile: WFCTileDef, pos: Vector3i) -> void:
@@ -1054,7 +1056,7 @@ func _create_shape(shape_type: ShapeType) -> ShapeTool:
 	return s
 
 
-## Update the shape preview — uses wireframe box for BoxShape, per-voxel cubes otherwise.
+## Update the shape preview — uses wireframe box for BoxShape, surface outline otherwise.
 func _update_shape_preview() -> void:
 	if not _shape_preview:
 		return
@@ -1099,8 +1101,8 @@ func _update_shape_preview() -> void:
 
 		_shape_preview.update_box_wireframe(min_p, max_p)
 	else:
-		var preview: Array[Vector3i] = current_shape.get_preview()
-		_shape_preview.update_positions(_expand_with_symmetry(preview))
+		var preview: Array[Vector3i] = current_shape.get_surface_preview()
+		_shape_preview.update_surface(_expand_with_symmetry(preview))
 
 
 
@@ -1795,41 +1797,78 @@ func _compute_angle_on_plane(point: Vector3, center: Vector3, axis: int) -> floa
 			return rad_to_deg(atan2(rel.y, rel.x))
 
 
-## Height tracking via screen-space mouse delta — no raycasting needed.
-## Captures the screen direction of face_normal and start mouse position at
-## phase transition, then tracks how far the mouse moves along that direction.
-var _height_start_mouse := Vector2.ZERO
-var _height_screen_dir := Vector2.ZERO   # Normalized screen direction of face_normal
-var _height_pixels_per_voxel := 20.0     # How many screen pixels = 1 voxel of height
-
-const HEIGHT_MIN_PIXELS_PER_VOXEL := 4.0
+## Height tracking via ray-to-line closest point.
+## Casts a ray from the mouse and finds the closest point on the face_normal
+## line through the nearest AABB corner. The preview edge tracks the cursor.
+var _height_line_dir := Vector3.ZERO       # face_normal direction (unit)
+var _height_corners: Array[Vector3] = []   # AABB corners of the base footprint (at height=0)
 
 
 func _setup_height_tracking() -> void:
-	_height_start_mouse = _container_to_viewport(
-		_viewport_container.get_local_mouse_position())
-	# Project face_normal to screen space to get the drag direction
-	var base_world := _work_plane_point
-	var face_n := Vector3(current_shape.face_normal)
-	var screen_base := _camera.unproject_position(base_world)
-	var screen_tip := _camera.unproject_position(base_world + face_n)
-	var screen_delta := screen_tip - screen_base
-	var ppu := screen_delta.length()
-	if ppu < HEIGHT_MIN_PIXELS_PER_VOXEL:
-		# Face normal nearly perpendicular to screen — fall back to vertical drag
-		_height_screen_dir = Vector2(0, -1)
-		_height_pixels_per_voxel = 20.0
-	else:
-		_height_screen_dir = screen_delta / ppu
-		_height_pixels_per_voxel = ppu
+	_height_line_dir = Vector3(current_shape.face_normal).normalized()
+
+	# Compute AABB corners of the base footprint
+	var base: Array[Vector3i] = current_shape._base_positions
+	if base.is_empty():
+		_height_corners = [_work_plane_point]
+		return
+
+	var min_p := base[0]
+	var max_p := base[0]
+	for p in base:
+		min_p = Vector3i(mini(min_p.x, p.x), mini(min_p.y, p.y), mini(min_p.z, p.z))
+		max_p = Vector3i(maxi(max_p.x, p.x), maxi(max_p.y, p.y), maxi(max_p.z, p.z))
+
+	# Box goes from min_p to max_p + 1 (voxel edges, not centers)
+	var a := Vector3(min_p)
+	var b := Vector3(max_p + Vector3i.ONE)
+	_height_corners = [
+		Vector3(a.x, a.y, a.z), Vector3(b.x, a.y, a.z),
+		Vector3(b.x, a.y, b.z), Vector3(a.x, a.y, b.z),
+		Vector3(a.x, b.y, a.z), Vector3(b.x, b.y, a.z),
+		Vector3(b.x, b.y, b.z), Vector3(a.x, b.y, b.z),
+	]
 
 
 func _update_height_from_mouse() -> void:
-	var current_mouse := _container_to_viewport(
+	var mouse_pos := _container_to_viewport(
 		_viewport_container.get_local_mouse_position())
-	var delta := current_mouse - _height_start_mouse
-	var projected := delta.dot(_height_screen_dir)
-	current_shape.set_height(int(roundf(projected / _height_pixels_per_voxel)))
+	var ray_origin := _camera.project_ray_origin(mouse_pos)
+	var ray_dir := _camera.project_ray_normal(mouse_pos)
+
+	# Pick the AABB corner closest to the camera as the line origin
+	var cam_pos := _camera.global_position
+	var line_origin := _height_corners[0]
+	var best_dist := cam_pos.distance_squared_to(line_origin)
+	for i in range(1, _height_corners.size()):
+		var d := cam_pos.distance_squared_to(_height_corners[i])
+		if d < best_dist:
+			best_dist = d
+			line_origin = _height_corners[i]
+
+	# Find closest point on the face_normal line to the mouse ray.
+	# Line A: line_origin + t * _height_line_dir
+	# Line B: ray_origin + s * ray_dir
+	var w := line_origin - ray_origin
+	var b := _height_line_dir.dot(ray_dir)
+	var d := _height_line_dir.dot(w)
+	var e := ray_dir.dot(w)
+	var denom := 1.0 - b * b  # a=1, c=1 (both normalized)
+	if absf(denom) < 0.0001:
+		# Lines are nearly parallel — fall back to screen-space
+		var screen_base := _camera.unproject_position(line_origin)
+		var screen_tip := _camera.unproject_position(line_origin + _height_line_dir)
+		var screen_dir := screen_tip - screen_base
+		var ppu := screen_dir.length()
+		if ppu < 1.0:
+			return
+		var delta := mouse_pos - screen_base
+		var projected := delta.dot(screen_dir / ppu)
+		current_shape.set_height(int(roundf(projected / ppu)))
+		return
+
+	var t := (b * e - d) / denom
+	current_shape.set_height(int(roundf(t)))
 
 
 func _do_undo() -> void:
@@ -2080,7 +2119,7 @@ func _update_paste_preview(ray_origin: Vector3, ray_dir: Vector3) -> void:
 	if anchor.x >= 0 and _shape_preview:
 		var preview := clipboard.get_paste_preview(anchor, _editor_main.get_tile())
 		_shape_preview.set_preview_color(PrimaryMode.ADD)
-		_shape_preview.update_positions(preview)
+		_shape_preview.update_surface(preview)
 	elif _shape_preview:
 		_shape_preview.clear()
 
@@ -2428,7 +2467,7 @@ func _nudge_transform(offset: Vector3i) -> void:
 	# Show preview
 	if _shape_preview:
 		_shape_preview.set_preview_color(PrimaryMode.ADD)
-		_shape_preview.update_positions(transform_tool.get_move_preview())
+		_shape_preview.update_surface(transform_tool.get_move_preview())
 
 
 func _commit_transform() -> void:
@@ -2594,7 +2633,7 @@ func _update_transform_hover(ray_origin: Vector3, ray_dir: Vector3) -> void:
 			transform_tool.update_rotate(angle, snap)
 			if _shape_preview:
 				_shape_preview.set_preview_color(PrimaryMode.ADD)
-				_shape_preview.update_positions(transform_tool.get_rotate_preview())
+				_shape_preview.update_surface(transform_tool.get_rotate_preview())
 			if _transform_gizmo:
 				_transform_gizmo.set_rotate_feedback(
 					transform_tool.get_rotate_axis(),
@@ -2609,7 +2648,7 @@ func _update_transform_hover(ray_origin: Vector3, ray_dir: Vector3) -> void:
 			transform_tool.update_scale(dist)
 			if _shape_preview:
 				_shape_preview.set_preview_color(PrimaryMode.ADD)
-				_shape_preview.update_positions(transform_tool.get_scale_preview())
+				_shape_preview.update_surface(transform_tool.get_scale_preview())
 		return
 
 	# Move drag update
@@ -2619,4 +2658,4 @@ func _update_transform_hover(ray_origin: Vector3, ray_dir: Vector3) -> void:
 		transform_tool.update_move(_plane_hit_pos)
 		if _shape_preview:
 			_shape_preview.set_preview_color(PrimaryMode.ADD)
-			_shape_preview.update_positions(transform_tool.get_move_preview())
+			_shape_preview.update_surface(transform_tool.get_move_preview())

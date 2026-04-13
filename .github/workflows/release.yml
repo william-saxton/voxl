@@ -1,0 +1,151 @@
+name: Build & Release
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Linux: native lib + Godot export (self-hosted runner) ──────────────
+  build-linux:
+    if: github.event.pull_request.merged == true
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Ensure Godot export templates
+        run: |
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.6.stable"
+          if [ ! -d "$TEMPLATE_DIR" ]; then
+            mkdir -p "$TEMPLATE_DIR"
+            wget -q https://github.com/godotengine/godot-builds/releases/download/4.6-stable/Godot_v4.6-stable_export_templates.tpz -O /tmp/templates.zip
+            unzip -q /tmp/templates.zip -d /tmp/templates-tmp
+            mv /tmp/templates-tmp/templates/* "$TEMPLATE_DIR/"
+            rm -rf /tmp/templates.zip /tmp/templates-tmp
+          fi
+
+      - name: Build native library (Linux release)
+        run: |
+          cd native
+          scons platform=linux target=template_release -j$(nproc)
+
+      - name: Verify native library
+        run: test -f bin/libvoxl_native.linux.template_release.x86_64.so
+
+      - name: Import Godot project
+        run: godot --headless --import
+
+      - name: Export Linux build
+        run: |
+          mkdir -p build
+          godot --headless --export-release "Linux" build/VOXL.x86_64
+
+      - name: Package Linux build
+        run: |
+          cd build
+          chmod +x VOXL.x86_64
+          tar czf VOXL-linux-x86_64.tar.gz VOXL.x86_64 VOXL.pck
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: build/VOXL-linux-x86_64.tar.gz
+
+  # ── Windows: native lib + Godot export (GitHub-hosted runner) ──────────
+  build-windows:
+    if: github.event.pull_request.merged == true
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SCons
+        run: pip install scons
+
+      - name: Build native library (Windows release)
+        run: |
+          cd native
+          scons platform=windows target=template_release -j$env:NUMBER_OF_PROCESSORS
+
+      - name: Verify native library
+        run: |
+          if (!(Test-Path "bin/libvoxl_native.windows.template_release.x86_64.dll")) {
+            throw "Native library not found"
+          }
+
+      - name: Download Godot
+        run: |
+          $version = "4.6-stable"
+          Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/$version/Godot_v${version}_win64.exe.zip" -OutFile godot.zip
+          Expand-Archive godot.zip -DestinationPath godot-bin
+          Move-Item "godot-bin/Godot_v${version}_win64.exe" "godot-bin/godot.exe"
+
+      - name: Download Godot export templates
+        run: |
+          $version = "4.6-stable"
+          Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/$version/Godot_v${version}_export_templates.tpz" -OutFile templates.zip
+          $templateDir = "$env:APPDATA/Godot/export_templates/4.6.stable"
+          New-Item -ItemType Directory -Force -Path $templateDir
+          Expand-Archive templates.zip -DestinationPath templates-tmp
+          Move-Item "templates-tmp/templates/*" $templateDir
+
+      - name: Import Godot project
+        run: godot-bin/godot.exe --headless --import
+
+      - name: Export Windows build
+        run: |
+          New-Item -ItemType Directory -Force -Path build
+          godot-bin/godot.exe --headless --export-release "Windows Desktop" build/VOXL.exe
+
+      - name: Package Windows build
+        run: Compress-Archive -Path build/VOXL.exe, build/VOXL.pck -DestinationPath build/VOXL-windows-x86_64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: build/VOXL-windows-x86_64.zip
+
+  # ── Create GitHub Release with both platform builds ────────────────────
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate version tag
+        id: version
+        run: |
+          # Use date + short SHA for version
+          TAG="v$(date +%Y.%m.%d)-$(echo $GITHUB_SHA | cut -c1-7)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Version: $TAG"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "VOXL ${{ steps.version.outputs.tag }}" \
+            --notes "$(cat <<EOF
+          ## Changes
+          PR: #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}
+
+          ${{ github.event.pull_request.body }}
+          EOF
+          )" \
+            artifacts/linux-build/VOXL-linux-x86_64.tar.gz \
+            artifacts/windows-build/VOXL-windows-x86_64.zip
