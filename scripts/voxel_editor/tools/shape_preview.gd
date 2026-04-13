@@ -5,7 +5,7 @@ extends MultiMeshInstance3D
 ## Uses MultiMesh for efficient instanced rendering.
 ## Also supports wireframe box mode for box selections.
 
-const MAX_PREVIEW_VOXELS := 5000
+const MAX_PREVIEW_VOXELS := 50000
 
 var _material: StandardMaterial3D
 var _current_positions: Array[Vector3i] = []

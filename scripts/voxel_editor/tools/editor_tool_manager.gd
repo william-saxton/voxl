@@ -1463,7 +1463,7 @@ func _run_procedural_preview_gdscript(min_p: Vector3i, max_p: Vector3i) -> void:
 
 	var region_size := max_p - min_p + Vector3i.ONE
 	var vol: int = region_size.x * region_size.y * region_size.z
-	if vol > 500000:
+	if vol > 2000000:
 		_shape_preview.update_box_wireframe(min_p, max_p)
 		return
 
@@ -2097,11 +2097,11 @@ func select_all() -> void:
 			for z in tile.tile_size_z:
 				if tile.get_voxel(x, y, z) != 0:
 					positions.append(Vector3i(x, y, z))
-				if positions.size() >= 100000:
+				if positions.size() >= 500000:
 					break
-			if positions.size() >= 100000:
+			if positions.size() >= 500000:
 				break
-		if positions.size() >= 100000:
+		if positions.size() >= 500000:
 			break
 	selection.set_positions(positions)
 
