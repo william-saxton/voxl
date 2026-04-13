@@ -40,6 +40,12 @@ jobs:
             native/godot-cpp/gen
           key: godotcpp-linux-release-${{ hashFiles('.gitmodules', 'native/godot-cpp/SConstruct') }}
 
+      - name: Touch cached godot-cpp files (Linux)
+        if: steps.cache-godotcpp-linux.outputs.cache-hit == 'true'
+        run: |
+          find native/godot-cpp/gen -type f -exec touch {} +
+          find native/godot-cpp/bin -type f -exec touch {} +
+
       - name: Build native library (Linux release)
         run: |
           cd native
@@ -79,6 +85,13 @@ jobs:
             native/godot-cpp/bin
             native/godot-cpp/gen
           key: godotcpp-windows-release-${{ hashFiles('.gitmodules', 'native/godot-cpp/SConstruct') }}
+
+      - name: Touch cached godot-cpp files (Windows)
+        if: steps.cache-godotcpp-windows.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          find native/godot-cpp/gen -type f -exec touch {} +
+          find native/godot-cpp/bin -type f -exec touch {} +
 
       - name: Build native library (Windows release)
         shell: bash
