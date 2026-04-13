@@ -24,17 +24,19 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Triage issue with Claude
+      - name: Build prompt file
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
         run: |
-          claude -p --allowedTools 'Bash(git *)' 'Bash(cd native && scons *)' 'Bash(godot --headless *)' 'Bash(gh issue *)' 'Bash(gh pr *)' 'Bash(gh label *)' 'Bash(mkdir *)' 'Read' 'Edit' 'Write' 'Glob' 'Grep' <<PROMPT
+          cat > /tmp/claude-prompt.txt <<'HEREDOC'
           You are triaging a new GitHub issue for the VOXL project — a Godot 4.6 voxel
           terrain/physics simulation with a C++ GDExtension.
+          HEREDOC
+
+          cat >> /tmp/claude-prompt.txt <<HEREDOC
 
           ## Issue #${ISSUE_NUMBER}
           **Title:** ${ISSUE_TITLE}
@@ -42,6 +44,9 @@ jobs:
           **Body:**
           ${ISSUE_BODY}
 
+          HEREDOC
+
+          cat >> /tmp/claude-prompt.txt <<'HEREDOC'
           ## Your task
 
           1. **Analyze the issue.** Read the codebase to understand whether this is:
@@ -57,12 +62,12 @@ jobs:
              Create any labels that don't exist yet with `gh label create`.
 
           3. **If you can fix it (`claude-can-fix`):**
-             - Create a branch: `git checkout -b claude/fix-issue-${ISSUE_NUMBER}`
+             - Create a branch: `git checkout -b claude/fix-issue-<ISSUE_NUMBER>`
              - Implement the fix
              - Build the native library to verify:
-               \`cd native && scons platform=linux target=template_debug -j\$(nproc)\`
+               `cd native && scons platform=linux target=template_debug -j$(nproc)`
              - Run `godot --headless --import` to verify the project still imports cleanly
-             - Commit, push, and create a PR with `gh pr create` linking `Fixes #${ISSUE_NUMBER}`
+             - Commit, push, and create a PR with `gh pr create` linking `Fixes #<ISSUE_NUMBER>`
              - Comment on the issue explaining what you did
 
           4. **If you cannot fix it:**
@@ -78,4 +83,15 @@ jobs:
           - Build: SCons (native/SConstruct) → outputs to bin/
 
           Be conservative — only attempt a fix if you are confident it is correct.
-          PROMPT
+          HEREDOC
+
+          # Replace <ISSUE_NUMBER> placeholders in the static part
+          sed -i "s/<ISSUE_NUMBER>/${ISSUE_NUMBER}/g" /tmp/claude-prompt.txt
+
+      - name: Triage issue with Claude
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          claude -p \
+            --allowedTools 'Bash(git *)' 'Bash(cd native && scons *)' 'Bash(godot --headless *)' 'Bash(gh issue *)' 'Bash(gh pr *)' 'Bash(gh label *)' 'Bash(mkdir *)' 'Read' 'Edit' 'Write' 'Glob' 'Grep' \
+            < /tmp/claude-prompt.txt
