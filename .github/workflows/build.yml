@@ -31,16 +31,16 @@ jobs:
           mv /tmp/templates-tmp/templates/* "$TEMPLATE_DIR/"
           rm -rf /tmp/templates.zip /tmp/templates-tmp
 
-      - name: Cache SCons build (Linux)
+      - name: Cache godot-cpp build (Linux)
+        id: cache-godotcpp-linux
         uses: actions/cache@v4
         with:
-          path: .scons-cache
-          key: scons-linux-release-${{ hashFiles('native/godot-cpp/godot-headers/**', 'native/src/**') }}
-          restore-keys: scons-linux-release-
+          path: |
+            native/godot-cpp/bin
+            native/godot-cpp/gen
+          key: godotcpp-linux-release-${{ hashFiles('.gitmodules', 'native/godot-cpp/SConstruct') }}
 
       - name: Build native library (Linux release)
-        env:
-          SCONS_CACHE: ../.scons-cache
         run: |
           cd native
           scons platform=linux target=template_release -j$(nproc)
@@ -71,17 +71,17 @@ jobs:
       - name: Install SCons
         run: pip install scons
 
-      - name: Cache SCons build (Windows)
+      - name: Cache godot-cpp build (Windows)
+        id: cache-godotcpp-windows
         uses: actions/cache@v4
         with:
-          path: .scons-cache
-          key: scons-windows-release-${{ hashFiles('native/godot-cpp/godot-headers/**', 'native/src/**') }}
-          restore-keys: scons-windows-release-
+          path: |
+            native/godot-cpp/bin
+            native/godot-cpp/gen
+          key: godotcpp-windows-release-${{ hashFiles('.gitmodules', 'native/godot-cpp/SConstruct') }}
 
       - name: Build native library (Windows release)
         shell: bash
-        env:
-          SCONS_CACHE: ../.scons-cache
         run: |
           cd native
           scons platform=windows target=template_release -j${NUMBER_OF_PROCESSORS:-4}
