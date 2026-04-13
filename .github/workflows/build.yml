@@ -74,9 +74,12 @@ jobs:
         with:
           path: |
             native/.sconsign.dblite
-            native/godot-cpp/**/*.obj
-            native/src/**/*.obj
-          key: scons-windows-release-${{ hashFiles('native/src/**', 'native/SConstruct') }}
+            native/godot-cpp/bin
+            native/godot-cpp/gen
+            native/godot-cpp/src
+            native/src
+            bin
+          key: scons-windows-release-${{ hashFiles('native/src/**/*.cpp', 'native/src/**/*.h', 'native/SConstruct') }}
           restore-keys: scons-windows-release-
 
       - name: Build native library (Windows release)
@@ -87,7 +90,7 @@ jobs:
 
       - name: Verify native library
         run: |
-          if (!(Test-Path "bin/libvoxl_native.windows.template_release.x86_64.dll")) {
+          if (!(Test-Path "bin\libvoxl_native.windows.template_release.x86_64.dll")) {
             throw "Native library not found"
           }
 
@@ -106,22 +109,22 @@ jobs:
           $version = "4.6-stable"
           Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/$version/Godot_v${version}_win64.exe.zip" -OutFile godot.zip
           Expand-Archive godot.zip -DestinationPath godot-bin
-          Move-Item "godot-bin/Godot_v${version}_win64.exe" "godot-bin/godot.exe"
+          Move-Item "godot-bin\Godot_v${version}_win64.exe" "godot-bin\godot.exe"
 
       - name: Download Godot export templates
         if: steps.cache-godot-windows.outputs.cache-hit != 'true'
         run: |
           $version = "4.6-stable"
           Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/$version/Godot_v${version}_export_templates.tpz" -OutFile templates.zip
-          $templateDir = "$env:APPDATA/Godot/export_templates/4.6.stable"
+          $templateDir = "$env:APPDATA\Godot\export_templates\4.6.stable"
           New-Item -ItemType Directory -Force -Path $templateDir
           Expand-Archive templates.zip -DestinationPath templates-tmp
-          Move-Item "templates-tmp/templates/*" $templateDir
+          Move-Item "templates-tmp\templates\*" $templateDir
 
       - name: Import Godot project
-        run: godot-bin/godot.exe --headless --import
+        run: godot-bin\godot.exe --headless --import
 
       - name: Export Windows build
         run: |
           New-Item -ItemType Directory -Force -Path build
-          godot-bin/godot.exe --headless --export-release "Windows Desktop" build/VOXL.exe
+          godot-bin\godot.exe --headless --export-release "Windows Desktop" build\VOXL.exe
