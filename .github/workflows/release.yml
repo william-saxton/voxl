@@ -39,11 +39,13 @@ jobs:
       - name: Cache SCons build (Linux)
         uses: actions/cache@v4
         with:
-          path: native/.sconsign.dblite
-          key: scons-linux-release-${{ hashFiles('native/src/**', 'native/SConstruct') }}
+          path: .scons-cache
+          key: scons-linux-release-${{ hashFiles('native/godot-cpp/godot-headers/**', 'native/src/**') }}
           restore-keys: scons-linux-release-
 
       - name: Build native library (Linux release)
+        env:
+          SCONS_CACHE: ../.scons-cache
         run: |
           cd native
           scons platform=linux target=template_release -j$(nproc)
@@ -89,18 +91,14 @@ jobs:
       - name: Cache SCons build (Windows)
         uses: actions/cache@v4
         with:
-          path: |
-            native/.sconsign.dblite
-            native/godot-cpp/bin
-            native/godot-cpp/gen
-            native/godot-cpp/src
-            native/src
-            bin
-          key: scons-windows-release-${{ hashFiles('native/src/**/*.cpp', 'native/src/**/*.h', 'native/SConstruct') }}
+          path: .scons-cache
+          key: scons-windows-release-${{ hashFiles('native/godot-cpp/godot-headers/**', 'native/src/**') }}
           restore-keys: scons-windows-release-
 
       - name: Build native library (Windows release)
         shell: bash
+        env:
+          SCONS_CACHE: ../.scons-cache
         run: |
           cd native
           scons platform=windows target=template_release -j${NUMBER_OF_PROCESSORS:-4}

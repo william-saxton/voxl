@@ -5,6 +5,14 @@ env = SConscript("godot-cpp/SConstruct")
 
 env.Append(CPPPATH=["src/"])
 
+# Use content hashes so CI caching works across clean checkouts
+env.Decider("MD5")
+
+# Support SCons cache directory (set SCONS_CACHE env var to enable)
+cache_dir = os.environ.get("SCONS_CACHE")
+if cache_dir:
+    CacheDir(cache_dir)
+
 sources = Glob("src/*.cpp")
 
 if env["platform"] == "windows":

@@ -4,3 +4,4 @@
 voxl.zip
 /build/*
 /bin/**
+.scons-cache/
