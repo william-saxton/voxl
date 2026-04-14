@@ -137,6 +137,9 @@ var _guide_hover_pos := Vector3i(-999, -999, -999)
 var _guide_hover_normal := Vector3i.ZERO
 var _surface_query: VoxelQuery
 var _surface_guide: MeshInstance3D  # SurfaceGuideRenderer
+var _hover_guide_markers: Dictionary = {}  ## Current hover face markers (center + edge_midpoints)
+## Locked face marker sets keyed by "x,y,z|nx,ny,nz" so each face can be toggled individually.
+var _locked_guides: Dictionary = {}
 
 ## Numeric input for shape dimensions
 var _numeric_input: String = ""       ## Current typed number buffer
@@ -291,6 +294,17 @@ func _unhandled_input(event: InputEvent) -> void:
 				_sync_hollow()
 				hollow_changed.emit(hollow)
 				get_viewport().set_input_as_handled()
+			# L: lock/unlock highlight points on the hovered face (per-face toggle)
+			# Shift+L: clear every locked face
+			KEY_L:
+				if key.ctrl_pressed or key.alt_pressed:
+					pass
+				elif key.shift_pressed:
+					_clear_locked_guides()
+					get_viewport().set_input_as_handled()
+				else:
+					_toggle_guide_lock()
+					get_viewport().set_input_as_handled()
 			# Clipboard shortcuts
 			KEY_C:
 				if key.ctrl_pressed:
@@ -627,8 +641,8 @@ func handle_viewport_click(event: InputEventMouseButton) -> void:
 	var ray_dir := _camera.project_ray_normal(mouse_pos)
 
 	if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		# Alt+click = eyedropper in any mode
-		if event.alt_pressed:
+		# Alt+click = eyedropper, except in SELECT mode where alt means deselect
+		if event.alt_pressed and current_tool_type != ToolType.SELECT:
 			var eye_result := VoxelRaycast.cast(tile, ray_origin, ray_dir)
 			if eye_result.hit:
 				var idx := palette.find_entry(eye_result.voxel_id)
@@ -825,6 +839,19 @@ func _pick_voxel_id(palette: VoxelPalette) -> int:
 	return palette.get_voxel_id(selected_palette_index)
 
 
+## When a selection is active, return only positions inside it. Otherwise
+## return positions unchanged. Used to scope add/subtract/paint tools so they
+## affect only the selected region.
+func _mask_positions_by_selection(positions: Array[Vector3i]) -> Array[Vector3i]:
+	if selection.is_empty():
+		return positions
+	var masked: Array[Vector3i] = []
+	for pos in positions:
+		if selection.contains(pos):
+			masked.append(pos)
+	return masked
+
+
 func _apply_mode_to_positions(positions: Array[Vector3i], tile: WFCTileDef,
 		palette: VoxelPalette) -> void:
 	if positions.is_empty():
@@ -837,11 +864,18 @@ func _apply_mode_to_positions(positions: Array[Vector3i], tile: WFCTileDef,
 
 ## Shared native/fallback apply logic for shapes, fill, and extrude.
 ## voxel_id_overrides: optional Dictionary[Vector3i, int] for per-position IDs (extrude clone).
+## When a selection exists, `all_positions` is masked down to only positions inside it
+## unless skip_selection_mask is true (used by extrude, which filters its source face).
 func _apply_mode_common(all_positions: Array[Vector3i], tile: WFCTileDef,
 		palette: VoxelPalette, description: String,
-		voxel_id_overrides: Dictionary = {}) -> void:
+		voxel_id_overrides: Dictionary = {},
+		skip_selection_mask: bool = false) -> void:
 	if all_positions.is_empty():
 		return
+	if not skip_selection_mask:
+		all_positions = _mask_positions_by_selection(all_positions)
+		if all_positions.is_empty():
+			return
 	var renderer := _editor_main.get_tile_renderer()
 	var use_gradient := gradient_panel and gradient_panel.visible
 	var has_overrides := not voxel_id_overrides.is_empty()
@@ -904,6 +938,9 @@ func _brush_apply_positions(positions: Array[Vector3i], tile: WFCTileDef,
 	if positions.is_empty():
 		return
 	var all_positions: Array[Vector3i] = _expand_with_symmetry(positions)
+	all_positions = _mask_positions_by_selection(all_positions)
+	if all_positions.is_empty():
+		return
 	var use_gradient := gradient_panel and gradient_panel.visible
 	var voxel_id := _pick_voxel_id(palette) if not use_gradient else 0
 	var renderer := _editor_main.get_tile_renderer()
@@ -965,6 +1002,17 @@ func _handle_extrude_click(tile: WFCTileDef, _palette: VoxelPalette,
 		return
 	var face_dir := result.previous - result.position
 	if extrude_tool.begin(tile, result.position, face_dir, _camera, mouse_y):
+		# Scope the extrude source to the selection so only selected face voxels extrude
+		if not selection.is_empty():
+			var filtered: Array[Vector3i] = []
+			for spos in extrude_tool.surface:
+				if selection.contains(spos):
+					filtered.append(spos)
+			extrude_tool.surface = filtered
+			if filtered.is_empty():
+				extrude_tool.cancel()
+				return
+			extrude_tool._recompute_line_state()
 		# Show initial preview
 		if _shape_preview:
 			_shape_preview.set_preview_color(current_mode)
@@ -991,14 +1039,17 @@ func _handle_extrude_release(tile: WFCTileDef, palette: VoxelPalette) -> void:
 	# Pass extrude's per-position voxel IDs as overrides (for cloning surface materials)
 	var overrides: Dictionary = ext_result.get("voxel_ids", {})
 	_apply_mode_common(sym_targets, tile, palette,
-		"Extrude %d layers" % layer_count, overrides)
+		"Extrude %d layers" % layer_count, overrides, true)
 
 
 ## Handle mouse drag for extrude tool preview updates.
 func handle_viewport_drag(event: InputEventMouseMotion) -> void:
-	if not extrude_tool.active:
+	if not extrude_tool.active or not _camera:
 		return
-	extrude_tool.update_drag(event.position.y)
+	var mouse_pos := _container_to_viewport(event.position)
+	var ray_origin := _camera.project_ray_origin(mouse_pos)
+	var ray_dir := _camera.project_ray_normal(mouse_pos)
+	extrude_tool.update_drag_from_ray(_camera, ray_origin, ray_dir, mouse_pos)
 	if _shape_preview:
 		_shape_preview.set_preview_color(current_mode)
 		_shape_preview.update_surface(extrude_tool.get_preview(current_mode))
@@ -1188,14 +1239,60 @@ func _update_surface_guides(tile: WFCTileDef, hover_pos: Vector3i, face_normal: 
 			unique_mids.append(m)
 
 	var markers := { "center": center, "edge_midpoints": unique_mids }
-	_surface_guide.update_guides(markers)
+	# If this face is already locked, refresh its locked entry with the latest markers
+	var key := _guide_key(hover_pos, face_normal)
+	if _locked_guides.has(key):
+		_locked_guides[key] = markers
+	_hover_guide_markers = markers
+	_redraw_guides()
 
 
 func _clear_surface_guides() -> void:
 	_guide_hover_pos = Vector3i(-999, -999, -999)
 	_guide_hover_normal = Vector3i.ZERO
-	if _surface_guide:
-		_surface_guide.clear_guides()
+	_hover_guide_markers = {}
+	_redraw_guides()
+
+
+## Toggle lock state for the currently hovered face's guide points.
+## Multiple faces can be locked at once; pressing L again on a locked face unlocks it.
+func _toggle_guide_lock() -> void:
+	if _hover_guide_markers.is_empty():
+		return
+	var key := _guide_key(_guide_hover_pos, _guide_hover_normal)
+	if _locked_guides.has(key):
+		_locked_guides.erase(key)
+	else:
+		_locked_guides[key] = _hover_guide_markers.duplicate(true)
+	_redraw_guides()
+
+
+## Clear every locked face (bound to Shift+L).
+func _clear_locked_guides() -> void:
+	if _locked_guides.is_empty():
+		return
+	_locked_guides.clear()
+	_redraw_guides()
+
+
+## Build a stable string key identifying a face by voxel position + outward normal.
+func _guide_key(pos: Vector3i, normal: Vector3i) -> String:
+	return "%d,%d,%d|%d,%d,%d" % [pos.x, pos.y, pos.z, normal.x, normal.y, normal.z]
+
+
+## Send the currently-visible hover + locked marker sets to the guide renderer.
+func _redraw_guides() -> void:
+	if not _surface_guide:
+		return
+	var sets: Array = []
+	for key in _locked_guides:
+		sets.append(_locked_guides[key])
+	# Only append the hover set if this face isn't already locked (avoid double-draw)
+	if not _hover_guide_markers.is_empty():
+		var hover_key := _guide_key(_guide_hover_pos, _guide_hover_normal)
+		if not _locked_guides.has(hover_key):
+			sets.append(_hover_guide_markers)
+	_surface_guide.update_guides(sets)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1747,11 +1844,66 @@ var _plane_hit_pos := Vector3i.ZERO
 var _plane_hit_float := Vector3.ZERO
 
 func snap_position(pos: Vector3i) -> Vector3i:
-	if snap_grid <= 1 or snap_mode == SnapMode.OFF:
+	if snap_mode == SnapMode.OFF:
 		return pos
 	if not Input.is_key_pressed(KEY_CTRL):
 		return pos
+
+	# Prefer snapping to visible highlight points (center / edge midpoints)
+	# when the cursor is within a few voxels of one.
+	var ref_float := Vector3(pos) + Vector3(0.5, 0.5, 0.5)
+	var guide_snapped: Variant = _snap_to_guide_point(ref_float)
+	if guide_snapped != null:
+		return guide_snapped
+
+	if snap_grid <= 1:
+		return pos
 	return force_snap_position(pos)
+
+
+## Try to snap float_pos to the nearest visible guide point matching snap_mode.
+## Scans both the current hover face and every locked face.
+## Returns Vector3i when a guide is within GUIDE_SNAP_RADIUS voxels, else null.
+func _snap_to_guide_point(float_pos: Vector3) -> Variant:
+	const GUIDE_SNAP_RADIUS := 3.0
+
+	var best_point: Variant = null
+	var best_dist := GUIDE_SNAP_RADIUS
+
+	var candidate_sets: Array = []
+	if not _hover_guide_markers.is_empty():
+		candidate_sets.append(_hover_guide_markers)
+	for key in _locked_guides:
+		candidate_sets.append(_locked_guides[key])
+
+	for markers_v in candidate_sets:
+		if not (markers_v is Dictionary):
+			continue
+		var markers: Dictionary = markers_v
+		if snap_mode == SnapMode.CENTER:
+			var center: Variant = markers.get("center")
+			if center is Vector3:
+				var d := float_pos.distance_to(center)
+				if d <= best_dist:
+					best_dist = d
+					best_point = center
+		elif snap_mode == SnapMode.EDGE:
+			var midpoints: Variant = markers.get("edge_midpoints")
+			if midpoints is Array:
+				for mp: Vector3 in midpoints:
+					var dist := float_pos.distance_to(mp)
+					if dist <= best_dist:
+						best_dist = dist
+						best_point = mp
+
+	if best_point is Vector3:
+		var bp: Vector3 = best_point
+		return Vector3i(
+			int(floorf(bp.x)),
+			int(floorf(bp.y)),
+			int(floorf(bp.z)),
+		)
+	return null
 
 
 func force_snap_position(pos: Vector3i) -> Vector3i:
@@ -1951,8 +2103,9 @@ func _update_gizmo() -> void:
 func _handle_select_click(tile: WFCTileDef, ray_origin: Vector3,
 		ray_dir: Vector3, event: InputEventMouseButton) -> void:
 	var result := VoxelRaycast.cast(tile, ray_origin, ray_dir)
+	var deselect := event.alt_pressed
 	if not result.hit:
-		if not event.shift_pressed:
+		if not event.shift_pressed and not deselect:
 			selection.clear()
 		return
 
@@ -1966,7 +2119,9 @@ func _handle_select_click(tile: WFCTileDef, ray_origin: Vector3,
 					select_tool.update(_plane_hit_pos)
 				var positions := select_tool.commit_box(tile, _select_ref_id)
 				var sym_positions: Array[Vector3i] = _expand_with_symmetry(positions)
-				if event.shift_pressed:
+				if deselect:
+					selection.remove_array(sym_positions)
+				elif event.shift_pressed:
 					selection.add_array(sym_positions)
 				else:
 					selection.set_positions(sym_positions)
@@ -1974,7 +2129,7 @@ func _handle_select_click(tile: WFCTileDef, ray_origin: Vector3,
 					_shape_preview.clear()
 			else:
 				# First click — start box, capture ref voxel for filtering
-				if not event.shift_pressed:
+				if not event.shift_pressed and not deselect:
 					selection.clear()
 				_select_ref_id = tile.get_voxel(
 					result.position.x, result.position.y, result.position.z)
@@ -1983,33 +2138,40 @@ func _handle_select_click(tile: WFCTileDef, ray_origin: Vector3,
 				select_tool.begin(result.position, face)
 
 		SelectTool.SelectMode.BRUSH:
-			# Click starts drag — add clicked voxel(s) within brush size, drag adds more
-			if not event.shift_pressed and not select_tool.is_brush_dragging():
+			# Click starts drag — add/remove clicked voxel(s) within brush size
+			if not event.shift_pressed and not deselect and not select_tool.is_brush_dragging():
 				selection.clear()
 			var brush_positions: Array[Vector3i] = select_tool.get_brush_positions(result.position)
 			var brush_sym: Array[Vector3i] = _expand_with_symmetry(brush_positions)
-			for bp in brush_sym:
-				selection.add(bp)
+			if deselect:
+				selection.remove_array(brush_sym)
+			else:
+				for bp in brush_sym:
+					selection.add(bp)
 			select_tool.begin(result.position, face)
 
 		SelectTool.SelectMode.MAGIC:
 			# Flood select using query (connectivity + filters)
-			if not event.shift_pressed:
+			if not event.shift_pressed and not deselect:
 				selection.clear()
 			var positions := select_tool.magic_select(tile, result.position, face)
 			var sym_positions_m: Array[Vector3i] = _expand_with_symmetry(positions)
-			if event.shift_pressed:
+			if deselect:
+				selection.remove_array(sym_positions_m)
+			elif event.shift_pressed:
 				selection.add_array(sym_positions_m)
 			else:
 				selection.set_positions(sym_positions_m)
 
 		SelectTool.SelectMode.OBJECT:
 			# Object select: flood fill all connected geometry
-			if not event.shift_pressed:
+			if not event.shift_pressed and not deselect:
 				selection.clear()
 			var positions := select_tool.object_select(tile, result.position)
 			var sym_positions_o: Array[Vector3i] = _expand_with_symmetry(positions)
-			if event.shift_pressed:
+			if deselect:
+				selection.remove_array(sym_positions_o)
+			elif event.shift_pressed:
 				selection.add_array(sym_positions_o)
 			else:
 				selection.set_positions(sym_positions_o)
@@ -2032,15 +2194,18 @@ func _update_select_hover(ray_origin: Vector3, ray_dir: Vector3) -> void:
 					maxi(select_tool._box_start.z, select_tool._box_end.z))
 				_shape_preview.update_box_wireframe(box_min, box_max)
 	elif select_tool.mode == SelectTool.SelectMode.BRUSH and select_tool.is_brush_dragging():
-		# Brush drag — add voxels within brush size as mouse moves
+		# Brush drag — add (or remove when Alt held) voxels as mouse moves
 		var tile := _editor_main.get_tile()
 		if tile:
 			var result := VoxelRaycast.cast(tile, ray_origin, ray_dir)
 			if result.hit:
 				var drag_positions: Array[Vector3i] = select_tool.get_brush_positions(result.position)
 				var drag_sym: Array[Vector3i] = _expand_with_symmetry(drag_positions)
-				for dp in drag_sym:
-					selection.add(dp)
+				if Input.is_key_pressed(KEY_ALT):
+					selection.remove_array(drag_sym)
+				else:
+					for dp in drag_sym:
+						selection.add(dp)
 
 
 # --- Clipboard operations ---

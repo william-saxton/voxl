@@ -21,27 +21,37 @@ func _ready() -> void:
 
 
 ## Update guide markers.
-## markers: Dictionary with optional "center" (Vector3) and "edge_midpoints" (Array[Vector3]).
-func update_guides(markers: Dictionary) -> void:
-	if markers.is_empty():
+## marker_sets: Array of Dictionaries, each with optional "center" (Vector3) and
+## "edge_midpoints" (Array[Vector3]). Allows rendering several faces at once.
+func update_guides(marker_sets: Array) -> void:
+	if marker_sets.is_empty():
 		clear_guides()
 		return
 
 	var im := ImmediateMesh.new()
 	im.surface_begin(Mesh.PRIMITIVE_LINES, _material)
 
-	var center: Variant = markers.get("center")
-	if center is Vector3:
-		_draw_circle_marker(im, center, 0.45, _center_color)
-
-	var midpoints: Variant = markers.get("edge_midpoints")
-	if midpoints is Array:
-		for point: Vector3 in midpoints:
-			_draw_x_marker(im, point, 0.35, _midpoint_color)
+	var drew_anything := false
+	for markers in marker_sets:
+		if not (markers is Dictionary):
+			continue
+		var dict: Dictionary = markers
+		var center: Variant = dict.get("center")
+		if center is Vector3:
+			_draw_circle_marker(im, center, 0.45, _center_color)
+			drew_anything = true
+		var midpoints: Variant = dict.get("edge_midpoints")
+		if midpoints is Array:
+			for point: Vector3 in midpoints:
+				_draw_x_marker(im, point, 0.35, _midpoint_color)
+				drew_anything = true
 
 	im.surface_end()
-	mesh = im
-	visible = true
+	if drew_anything:
+		mesh = im
+		visible = true
+	else:
+		clear_guides()
 
 
 func clear_guides() -> void:
