@@ -122,15 +122,10 @@ jobs:
       - name: Verify native library
         run: test -f bin/libvoxl_native.windows.template_release.x86_64.dll
 
-      - name: Package Windows native library
-        run: |
-          cd bin
-          zip libvoxl_native-windows-x86_64.zip libvoxl_native.windows.template_release.x86_64.dll
-
       - uses: actions/upload-artifact@v4
         with:
           name: windows-native-lib
-          path: bin/libvoxl_native-windows-x86_64.zip
+          path: bin/libvoxl_native.windows.template_release.x86_64.dll
 
   build-windows-export:
     needs: build-windows-native
@@ -143,9 +138,6 @@ jobs:
         with:
           name: windows-native-lib
           path: bin
-
-      - name: Extract native library
-        run: Expand-Archive -Path "bin\libvoxl_native-windows-x86_64.zip" -DestinationPath bin -Force
 
       - name: Cache Godot + templates (Windows)
         id: cache-godot-windows
@@ -223,6 +215,11 @@ jobs:
             echo "::error::Release $TAG already exists. Bump the VERSION file before merging."
             exit 1
           fi
+
+      - name: Package Windows native library
+        run: |
+          cd artifacts/windows-native-lib
+          zip libvoxl_native-windows-x86_64.zip libvoxl_native.windows.template_release.x86_64.dll
 
       - name: Create release
         env:

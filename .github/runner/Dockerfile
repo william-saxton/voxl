@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Core dependencies
 RUN apt-get update && apt-get install -y \
-    curl wget unzip git jq sudo \
+    curl wget zip unzip git jq sudo \
     python3 python3-pip \
     build-essential gcc g++ pkg-config mingw-w64 \
     libx11-dev libxcursor-dev libxinerama-dev libxrandr-dev libxi-dev \
