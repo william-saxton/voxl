@@ -72,6 +72,23 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Cache Godot export templates (Windows cross-compile)
+        id: cache-templates-windows
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/godot/export_templates/4.6.stable
+          key: godot-templates-linux-4.6-stable
+
+      - name: Download Godot export templates
+        if: steps.cache-templates-windows.outputs.cache-hit != 'true'
+        run: |
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.6.stable"
+          mkdir -p "$TEMPLATE_DIR"
+          wget -q https://github.com/godotengine/godot-builds/releases/download/4.6-stable/Godot_v4.6-stable_export_templates.tpz -O /tmp/templates.zip
+          unzip -q /tmp/templates.zip -d /tmp/templates-tmp
+          mv /tmp/templates-tmp/templates/* "$TEMPLATE_DIR/"
+          rm -rf /tmp/templates.zip /tmp/templates-tmp
+
       - name: Cache godot-cpp build (Windows cross-compile)
         id: cache-godotcpp-windows
         uses: actions/cache@v4
