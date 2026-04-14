@@ -80,7 +80,6 @@ var _select_brush_size_spin: SpinBox
 
 # ── Snap controls ──
 var _snap_option: OptionButton
-var _snap_mode_option: OptionButton
 
 # ── Procedural shader controls ──
 var _proc_sep: VSeparator
@@ -435,21 +434,16 @@ func _setup_context_bar() -> void:
 	snap_lbl.text = "Snap:"
 	_context_hbox.add_child(snap_lbl)
 
+	# Snap dropdown: Off / Edge / Center. When set, holding Ctrl while clicking
+	# snaps the cursor to the nearest edge midpoint or face center within 3 voxels
+	# of any visible highlight point (hovered or locked with L).
 	_snap_option = OptionButton.new()
 	_snap_option.add_item("Off", 0)
-	_snap_option.add_item("2", 2)
-	_snap_option.add_item("4", 4)
-	_snap_option.add_item("8", 8)
-	_snap_option.add_item("16", 16)
-	_snap_option.item_selected.connect(_on_snap_grid_changed)
+	_snap_option.add_item("Edge", 1)
+	_snap_option.add_item("Center", 2)
+	_snap_option.tooltip_text = "Hold Ctrl while clicking to snap to the nearest highlight point."
+	_snap_option.item_selected.connect(_on_snap_mode_changed)
 	_context_hbox.add_child(_snap_option)
-
-	_snap_mode_option = OptionButton.new()
-	_snap_mode_option.add_item("Edge", 0)
-	_snap_mode_option.add_item("Center", 1)
-	_snap_mode_option.item_selected.connect(_on_snap_mode_changed)
-	_snap_mode_option.visible = false
-	_context_hbox.add_child(_snap_mode_option)
 
 	# Procedural shader controls
 	_proc_sep = VSeparator.new()
@@ -1337,24 +1331,17 @@ func _on_tool_type_changed(_tool_type: EditorToolManager.ToolType) -> void:
 	_update_sub_tools()
 
 
-func _on_snap_grid_changed(option_index: int) -> void:
-	var grid := _snap_option.get_item_id(option_index)
-	_tool_manager.snap_grid = grid
-	if grid == 0:
-		_tool_manager.snap_mode = EditorToolManager.SnapMode.OFF
-		_snap_mode_option.visible = false
-		_editor_grid.set_snap(0, false)
-	else:
-		var center := _snap_mode_option.selected == 1
-		_tool_manager.snap_mode = EditorToolManager.SnapMode.EDGE if not center else EditorToolManager.SnapMode.CENTER
-		_snap_mode_option.visible = true
-		_editor_grid.set_snap(grid, center)
-
-
 func _on_snap_mode_changed(option_index: int) -> void:
-	var center := option_index == 1
-	_tool_manager.snap_mode = EditorToolManager.SnapMode.EDGE if not center else EditorToolManager.SnapMode.CENTER
-	_editor_grid.set_snap(_tool_manager.snap_grid, center)
+	match option_index:
+		1:
+			_tool_manager.snap_mode = EditorToolManager.SnapMode.EDGE
+		2:
+			_tool_manager.snap_mode = EditorToolManager.SnapMode.CENTER
+		_:
+			_tool_manager.snap_mode = EditorToolManager.SnapMode.OFF
+	# Guide-point snap does not use the grid overlay, keep it hidden
+	_tool_manager.snap_grid = 0
+	_editor_grid.set_snap(0, false)
 
 
 func _on_brush_size_changed(value: float) -> void:

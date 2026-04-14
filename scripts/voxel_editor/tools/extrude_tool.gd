@@ -15,16 +15,16 @@ var surface: Array[Vector3i] = []
 var face_dir := Vector3i.ZERO
 var source_ids: Dictionary = {}  ## Vector3i surface pos → int voxel_id
 var layers: int = 1
-var _start_mouse_y: float = 0.0
-var _face_screen_dir: float = 1.0  ## +1 or -1: whether dragging up = more layers
 
-const PIXELS_PER_LAYER := 20
+## Ray-projection state — the clicked face defines a 3D line along face_dir
+## that the mouse cursor is projected onto each frame.
+var _line_corners: Array[Vector3] = []  ## AABB corners of the source face (world space)
+var _line_dir: Vector3 = Vector3.ZERO   ## Unit vector along face_dir
 
 
 ## Begin an extrude gesture. Finds the connected surface at pos.
-## camera is needed to determine screen-space direction of face_dir.
 func begin(tile: WFCTileDef, pos: Vector3i, face: Vector3i,
-		camera: Camera3D, mouse_y: float) -> bool:
+		_camera: Camera3D, _mouse_y: float) -> bool:
 	var vid := tile.get_voxel(pos.x, pos.y, pos.z)
 	if vid == 0:
 		return false
@@ -39,30 +39,81 @@ func begin(tile: WFCTileDef, pos: Vector3i, face: Vector3i,
 	for spos in surface:
 		source_ids[spos] = tile.get_voxel(spos.x, spos.y, spos.z)
 
-	# Determine screen-space direction: does moving mouse up increase or decrease layers?
-	var world_pos := Vector3(pos) + Vector3(0.5, 0.5, 0.5)
-	var screen_start := camera.unproject_position(world_pos)
-	var screen_end := camera.unproject_position(world_pos + Vector3(face))
-	# Map screen-space face direction to mouse Y drag:
-	# If face points up on screen (screen_end.y < screen_start.y, diff negative),
-	# dragging mouse up (negative delta) should add layers → need negative × negative = positive
-	_face_screen_dir = signf(screen_end.y - screen_start.y)
-	if absf(screen_end.y - screen_start.y) < 2.0:
-		# Face is nearly horizontal on screen — use X instead
-		_face_screen_dir = signf(screen_end.x - screen_start.x)
-
-	_start_mouse_y = mouse_y
+	_recompute_line_state()
 	layers = 1
 	active = true
 	return true
 
 
-## Update layer count from mouse drag.
-func update_drag(mouse_y: float) -> void:
-	if not active:
+## Rebuild the projection line state from the current `surface`. Call this
+## after the caller filters the surface (e.g. to a selection) so the
+## drag projection anchors on the actual extrusion source.
+func _recompute_line_state() -> void:
+	_line_dir = Vector3(face_dir).normalized()
+	if surface.is_empty():
+		_line_corners = []
 		return
-	var delta := (mouse_y - _start_mouse_y) * _face_screen_dir
-	layers = maxi(1, int(delta / PIXELS_PER_LAYER) + 1)
+	var face_offset := Vector3(face_dir) * 0.5
+	var min_p := Vector3(surface[0])
+	var max_p := min_p
+	for spos in surface:
+		var v := Vector3(spos)
+		min_p.x = minf(min_p.x, v.x)
+		min_p.y = minf(min_p.y, v.y)
+		min_p.z = minf(min_p.z, v.z)
+		max_p.x = maxf(max_p.x, v.x)
+		max_p.y = maxf(max_p.y, v.y)
+		max_p.z = maxf(max_p.z, v.z)
+	min_p += Vector3(0.5, 0.5, 0.5) + face_offset
+	max_p += Vector3(0.5, 0.5, 0.5) + face_offset
+	_line_corners = [
+		Vector3(min_p.x, min_p.y, min_p.z),
+		Vector3(max_p.x, min_p.y, min_p.z),
+		Vector3(min_p.x, max_p.y, min_p.z),
+		Vector3(max_p.x, max_p.y, min_p.z),
+		Vector3(min_p.x, min_p.y, max_p.z),
+		Vector3(max_p.x, min_p.y, max_p.z),
+		Vector3(min_p.x, max_p.y, max_p.z),
+		Vector3(max_p.x, max_p.y, max_p.z),
+	]
+
+
+## Update layer count by projecting the mouse ray onto the extrusion line.
+## Finds the closest point on the line through the face-AABB corner nearest the camera.
+func update_drag_from_ray(camera: Camera3D, ray_origin: Vector3, ray_dir: Vector3,
+		mouse_pos: Vector2) -> void:
+	if not active or _line_corners.is_empty():
+		return
+
+	var cam_pos := camera.global_position
+	var line_origin := _line_corners[0]
+	var best_dist := cam_pos.distance_squared_to(line_origin)
+	for i in range(1, _line_corners.size()):
+		var d := cam_pos.distance_squared_to(_line_corners[i])
+		if d < best_dist:
+			best_dist = d
+			line_origin = _line_corners[i]
+
+	var w := line_origin - ray_origin
+	var b := _line_dir.dot(ray_dir)
+	var d_val := _line_dir.dot(w)
+	var e := ray_dir.dot(w)
+	var denom := 1.0 - b * b
+	var t: float
+	if absf(denom) < 0.0001:
+		# Lines nearly parallel — fall back to screen-space projection
+		var screen_base := camera.unproject_position(line_origin)
+		var screen_tip := camera.unproject_position(line_origin + _line_dir)
+		var screen_dir := screen_tip - screen_base
+		var ppu := screen_dir.length()
+		if ppu < 1.0:
+			return
+		var delta := mouse_pos - screen_base
+		t = delta.dot(screen_dir / ppu) / ppu
+	else:
+		t = (b * e - d_val) / denom
+
+	layers = maxi(1, int(roundf(t)))
 
 
 ## Get preview positions for the current layer count and mode.
