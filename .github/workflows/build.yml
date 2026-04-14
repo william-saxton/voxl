@@ -146,4 +146,8 @@ jobs:
       - name: Export Windows build
         run: |
           New-Item -ItemType Directory -Force -Path build
-          godot-bin\godot.exe --headless --export-release "Windows Desktop" build\VOXL.exe
+          godot-bin\godot.exe --headless --verbose --export-release "Windows Desktop" build\VOXL.exe
+
+      - name: List build output
+        if: always()
+        run: Get-ChildItem build\ -Recurse -ErrorAction SilentlyContinue
