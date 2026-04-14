@@ -80,31 +80,14 @@ jobs:
           name: linux-build
           path: build/VOXL-linux-x86_64.tar.gz
 
-  # ── Windows: cross-compile native lib + Godot export (self-hosted Linux) ──
-  build-windows:
+  # ── Windows: cross-compile native lib on Linux, export on Windows ──────
+  build-windows-native:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: [self-hosted, linux, x64]
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Cache Godot export templates (Windows cross-compile)
-        id: cache-templates-windows
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/share/godot/export_templates/4.6.stable
-          key: godot-templates-linux-4.6-stable
-
-      - name: Download Godot export templates
-        if: steps.cache-templates-windows.outputs.cache-hit != 'true'
-        run: |
-          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.6.stable"
-          mkdir -p "$TEMPLATE_DIR"
-          wget -q https://github.com/godotengine/godot-builds/releases/download/4.6-stable/Godot_v4.6-stable_export_templates.tpz -O /tmp/templates.zip
-          unzip -q /tmp/templates.zip -d /tmp/templates-tmp
-          mv /tmp/templates-tmp/templates/* "$TEMPLATE_DIR/"
-          rm -rf /tmp/templates.zip /tmp/templates-tmp
 
       - name: Cache godot-cpp build (Windows cross-compile)
         id: cache-godotcpp-windows
@@ -131,18 +114,63 @@ jobs:
       - name: Verify native library
         run: test -f bin/libvoxl_native.windows.template_release.x86_64.dll
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-lib
+          path: bin/libvoxl_native.windows.template_release.x86_64.dll
+
+  build-windows-export:
+    needs: build-windows-native
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-native-lib
+          path: bin
+
+      - name: Cache Godot + templates (Windows)
+        id: cache-godot-windows
+        uses: actions/cache@v4
+        with:
+          path: |
+            godot-bin
+            ~/AppData/Roaming/Godot/export_templates/4.6.stable
+          key: godot-windows-4.6-stable
+
+      - name: Download Godot
+        if: steps.cache-godot-windows.outputs.cache-hit != 'true'
+        run: |
+          $version = "4.6-stable"
+          Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/$version/Godot_v${version}_win64.exe.zip" -OutFile godot.zip
+          Expand-Archive godot.zip -DestinationPath godot-bin
+          Move-Item "godot-bin\Godot_v${version}_win64.exe" "godot-bin\godot.exe"
+
+      - name: Download Godot export templates
+        if: steps.cache-godot-windows.outputs.cache-hit != 'true'
+        run: |
+          $version = "4.6-stable"
+          Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/$version/Godot_v${version}_export_templates.tpz" -OutFile templates.zip
+          $templateDir = "$env:APPDATA\Godot\export_templates\4.6.stable"
+          New-Item -ItemType Directory -Force -Path $templateDir
+          Expand-Archive templates.zip -DestinationPath templates-tmp
+          Move-Item "templates-tmp\templates\*" $templateDir
+
       - name: Import Godot project
-        run: godot --headless --import
+        run: godot-bin\godot.exe --headless --import
 
       - name: Export Windows build
         run: |
-          mkdir -p build
-          godot --headless --export-release "Windows Desktop" build/VOXL.exe
+          New-Item -ItemType Directory -Force -Path build
+          godot-bin\godot.exe --headless --export-release "Windows Desktop" build\VOXL.exe
 
       - name: Package Windows build
         run: |
-          cd build
-          zip VOXL-windows-x86_64.zip VOXL.*
+          $files = Get-ChildItem "build\VOXL*"
+          if ($files.Count -eq 0) { throw "No build output found" }
+          Compress-Archive -Path $files.FullName -DestinationPath "build\VOXL-windows-x86_64.zip"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -151,7 +179,7 @@ jobs:
 
   # ── Create GitHub Release with both platform builds ────────────────────
   release:
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows-export]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
