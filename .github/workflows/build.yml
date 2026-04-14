@@ -146,7 +146,7 @@ jobs:
       - name: Export Windows build
         run: |
           New-Item -ItemType Directory -Force -Path build
-          $proc = Start-Process -FilePath "godot-bin\godot.exe" -ArgumentList "--headless","--export-release","Windows Desktop","build\VOXL.exe" -Wait -PassThru -NoNewWindow
+          $proc = Start-Process -FilePath "godot-bin\godot.exe" -ArgumentList '--headless --export-release "Windows Desktop" build\VOXL.exe' -Wait -PassThru -NoNewWindow
           Write-Host "Godot exit code: $($proc.ExitCode)"
           if ($proc.ExitCode -ne 0) { throw "Godot export failed with exit code $($proc.ExitCode)" }
           if (!(Test-Path "build\VOXL.exe")) { throw "Export produced no output file" }
