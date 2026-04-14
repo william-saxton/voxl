@@ -69,6 +69,14 @@ jobs:
           mkdir -p build
           godot --headless --export-release "Linux" build/VOXL.x86_64
 
+      - name: Package Linux native library
+        run: tar czf bin/libvoxl_native-linux-x86_64.tar.gz -C bin libvoxl_native.linux.template_release.x86_64.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-native-lib
+          path: bin/libvoxl_native-linux-x86_64.tar.gz
+
       - name: Package Linux build
         run: |
           cd build
@@ -114,10 +122,15 @@ jobs:
       - name: Verify native library
         run: test -f bin/libvoxl_native.windows.template_release.x86_64.dll
 
+      - name: Package Windows native library
+        run: |
+          cd bin
+          zip libvoxl_native-windows-x86_64.zip libvoxl_native.windows.template_release.x86_64.dll
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-native-lib
-          path: bin/libvoxl_native.windows.template_release.x86_64.dll
+          path: bin/libvoxl_native-windows-x86_64.zip
 
   build-windows-export:
     needs: build-windows-native
@@ -130,6 +143,9 @@ jobs:
         with:
           name: windows-native-lib
           path: bin
+
+      - name: Extract native library
+        run: Expand-Archive -Path "bin\libvoxl_native-windows-x86_64.zip" -DestinationPath bin -Force
 
       - name: Cache Godot + templates (Windows)
         id: cache-godot-windows
@@ -184,7 +200,7 @@ jobs:
           name: windows-build
           path: build/VOXL-windows-x86_64.zip
 
-  # ── Create GitHub Release with both platform builds ────────────────────
+  # ── Create GitHub Release with all artifacts ──────────────────────────
   release:
     needs: [build-linux, build-windows-export]
     runs-on: ubuntu-latest
@@ -195,12 +211,18 @@ jobs:
         with:
           path: artifacts
 
-      - name: Generate version tag
+      - name: Read version
         id: version
         run: |
-          TAG="v$(date +%Y.%m.%d)-$(echo $GITHUB_SHA | cut -c1-7)"
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          TAG="v${VERSION}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $TAG"
+          if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists. Bump the VERSION file before merging."
+            exit 1
+          fi
 
       - name: Create release
         env:
@@ -208,12 +230,22 @@ jobs:
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "VOXL ${{ steps.version.outputs.tag }}" \
-            --notes "$(cat <<EOF
+            --notes "$(cat <<'EOF'
+          ## Native Library
+          - `libvoxl_native-linux-x86_64.tar.gz` — Linux GDExtension library
+          - `libvoxl_native-windows-x86_64.zip` — Windows GDExtension library
+
+          ## Game Builds
+          - `VOXL-linux-x86_64.tar.gz` — Linux game export
+          - `VOXL-windows-x86_64.zip` — Windows game export
+
           ## Changes
           PR: #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}
 
           ${{ github.event.pull_request.body }}
           EOF
           )" \
+            artifacts/linux-native-lib/libvoxl_native-linux-x86_64.tar.gz \
+            artifacts/windows-native-lib/libvoxl_native-windows-x86_64.zip \
             artifacts/linux-build/VOXL-linux-x86_64.tar.gz \
             artifacts/windows-build/VOXL-windows-x86_64.zip
