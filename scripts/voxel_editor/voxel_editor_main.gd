@@ -93,6 +93,16 @@ var _stats_label: Label
 var _y_slice_slider: HSlider
 var _y_slice_label: Label
 
+# ── Player-capsule drag gizmo ──
+var _dragging_capsule: bool = false
+var _capsule_drag_offset: Vector3 = Vector3.ZERO
+
+# ── Mouse-following numeric-size overlay ──
+var _numeric_overlay: HBoxContainer
+var _numeric_overlay_boxes: Array[PanelContainer] = []
+var _numeric_overlay_labels: Array[Label] = []
+var _numeric_overlay_values: Array[Label] = []
+
 # ── State ──
 var _ui_scale: float = 1.0
 
@@ -298,7 +308,9 @@ func _setup_menu() -> void:
 	view_menu.add_separator()
 	view_menu.add_check_item("Player Reference", 30)
 	view_menu.set_item_checked(view_menu.get_item_index(30), true)
-	view_menu.add_item("Player Ref Size...", 31)
+	view_menu.add_item("Player Ref Size / Position...", 31)
+	view_menu.add_check_item("Rift Delver Floor", 32)
+	view_menu.add_item("Floor Depth...", 33)
 	view_menu.add_separator()
 	view_menu.add_item("UI Scale: 75%", 10)
 	view_menu.add_item("UI Scale: 100%", 11)
@@ -374,9 +386,11 @@ func _setup_tools() -> void:
 	_tool_manager.select_settings_changed.connect(_on_select_settings_changed)
 	_tool_manager.symmetry_changed.connect(_on_symmetry_changed)
 	_tool_manager.numeric_input_changed.connect(_on_numeric_input_changed)
+	_tool_manager.numeric_state_changed.connect(_on_numeric_state_changed)
 	_tool_manager.procedural_preset_changed.connect(_on_procedural_preset_synced)
 
 	_viewport_container.gui_input.connect(_on_viewport_gui_input)
+	_setup_numeric_overlay()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1183,51 +1197,83 @@ func _on_view_menu(id: int) -> void:
 			vm.set_item_checked(vm.get_item_index(30), vis)
 		31:
 			_show_ref_size_dialog()
+		32:
+			var fvis := not _editor_grid._floor_visible
+			_editor_grid.set_floor_visible(fvis)
+			var vm3: PopupMenu = %MenuBar.get_child(2)
+			vm3.set_item_checked(vm3.get_item_index(32), fvis)
+		33:
+			_show_floor_depth_dialog()
 
 
 func _show_ref_size_dialog() -> void:
 	var dialog := AcceptDialog.new()
-	dialog.title = "Player Reference Size"
-	dialog.min_size = Vector2i(250, 0)
+	dialog.title = "Player Reference"
+	dialog.min_size = Vector2i(280, 0)
 
 	var vbox := VBoxContainer.new()
 
-	var h_row := HBoxContainer.new()
-	var h_lbl := Label.new()
-	h_lbl.text = "Height:"
-	h_lbl.custom_minimum_size.x = 60
-	h_row.add_child(h_lbl)
-	var h_spin := SpinBox.new()
-	h_spin.min_value = 1.0
-	h_spin.max_value = 20.0
-	h_spin.step = 0.5
-	h_spin.value = _editor_grid._ref_height
-	h_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	h_row.add_child(h_spin)
-	vbox.add_child(h_row)
-
-	var r_row := HBoxContainer.new()
-	var r_lbl := Label.new()
-	r_lbl.text = "Radius:"
-	r_lbl.custom_minimum_size.x = 60
-	r_row.add_child(r_lbl)
-	var r_spin := SpinBox.new()
-	r_spin.min_value = 0.25
-	r_spin.max_value = 5.0
-	r_spin.step = 0.25
-	r_spin.value = _editor_grid._ref_radius
-	r_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	r_row.add_child(r_spin)
-	vbox.add_child(r_row)
+	var h_spin := _make_labeled_spin(vbox, "Height:", 1.0, 40.0, 0.5, _editor_grid._ref_height)
+	var r_spin := _make_labeled_spin(vbox, "Radius:", 0.25, 20.0, 0.25, _editor_grid._ref_radius)
+	var x_spin := _make_labeled_spin(vbox, "Position X:", -512.0, 512.0, 1.0, _editor_grid._ref_pos_x)
+	var z_spin := _make_labeled_spin(vbox, "Position Z:", -512.0, 512.0, 1.0, _editor_grid._ref_pos_z)
 
 	dialog.add_child(vbox)
 	dialog.confirmed.connect(func():
 		_editor_grid.set_ref_size(h_spin.value, r_spin.value)
+		_editor_grid.set_ref_position(x_spin.value, z_spin.value)
 		dialog.queue_free()
 	)
 	dialog.canceled.connect(func(): dialog.queue_free())
 	add_child(dialog)
 	dialog.popup_centered()
+
+
+func _show_floor_depth_dialog() -> void:
+	var dialog := AcceptDialog.new()
+	dialog.title = "Rift Delver Floor Depth"
+	dialog.min_size = Vector2i(280, 0)
+
+	var vbox := VBoxContainer.new()
+	var note := Label.new()
+	note.text = "Depth below Y=0 in voxels.\nDefault 32 = one player height (docs say ~32 voxels)."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(note)
+
+	var d_spin := _make_labeled_spin(vbox, "Depth:", 1.0, 256.0, 1.0, _editor_grid._floor_depth)
+
+	dialog.add_child(vbox)
+	dialog.confirmed.connect(func():
+		_editor_grid.set_floor_depth(d_spin.value)
+		# Show the floor if the user set a depth — they clearly want to see it.
+		if not _editor_grid._floor_visible:
+			_editor_grid.set_floor_visible(true)
+			var vm: PopupMenu = %MenuBar.get_child(2)
+			vm.set_item_checked(vm.get_item_index(32), true)
+		dialog.queue_free()
+	)
+	dialog.canceled.connect(func(): dialog.queue_free())
+	add_child(dialog)
+	dialog.popup_centered()
+
+
+func _make_labeled_spin(parent: VBoxContainer, label: String, min_v: float, max_v: float, step: float, value: float) -> SpinBox:
+	var row := HBoxContainer.new()
+	var lbl := Label.new()
+	lbl.text = label
+	lbl.custom_minimum_size.x = 80
+	row.add_child(lbl)
+	var spin := SpinBox.new()
+	spin.min_value = min_v
+	spin.max_value = max_v
+	spin.step = step
+	spin.value = value
+	spin.allow_greater = false
+	spin.allow_lesser = false
+	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(spin)
+	parent.add_child(row)
+	return spin
 
 
 func _open_shader_dialog() -> void:
@@ -1299,11 +1345,80 @@ func _on_shader_apply(code: String, origin: Vector3i, region_size: Vector3i, vid
 func _on_viewport_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed:
+				if _try_begin_capsule_drag(mb.position):
+					return
+			elif _dragging_capsule:
+				_dragging_capsule = false
+				_editor_grid.set_ref_highlight(false)
+				return
 		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
 			_tool_manager.handle_viewport_click(mb)
 	elif event is InputEventMouseMotion:
+		if _dragging_capsule:
+			_update_capsule_drag((event as InputEventMouseMotion).position)
+			return
 		if _tool_manager.extrude_tool.active:
 			_tool_manager.handle_viewport_drag(event as InputEventMouseMotion)
+
+
+func _viewport_mouse_ray(container_pos: Vector2) -> Array:
+	var container_size := _viewport_container.size
+	var vp_size := Vector2(_viewport.size)
+	var mouse_pos := container_pos
+	if container_size.x > 0 and container_size.y > 0:
+		mouse_pos = container_pos * vp_size / container_size
+	var cam := _camera_pivot.get_camera()
+	return [cam.project_ray_origin(mouse_pos), cam.project_ray_normal(mouse_pos)]
+
+
+func _try_begin_capsule_drag(container_pos: Vector2) -> bool:
+	if not _editor_grid._ref_visible:
+		return false
+	var aabb := _editor_grid.get_ref_aabb()
+	if aabb.size == Vector3.ZERO:
+		return false
+	var ray := _viewport_mouse_ray(container_pos)
+	var origin: Vector3 = ray[0]
+	var dir: Vector3 = ray[1]
+	if not aabb.intersects_ray(origin, dir):
+		return false
+	# Grab offset so the capsule doesn't jump to the grab point on drag start.
+	var ground_hit: Variant = _ray_to_y_plane(origin, dir, _editor_grid._ref_height * 0.5)
+	if ground_hit == null:
+		return false
+	var hit_pos: Vector3 = ground_hit
+	_capsule_drag_offset = Vector3(
+		_editor_grid._ref_pos_x - hit_pos.x,
+		0.0,
+		_editor_grid._ref_pos_z - hit_pos.z)
+	_dragging_capsule = true
+	_editor_grid.set_ref_highlight(true)
+	return true
+
+
+func _update_capsule_drag(container_pos: Vector2) -> void:
+	var ray := _viewport_mouse_ray(container_pos)
+	var origin: Vector3 = ray[0]
+	var dir: Vector3 = ray[1]
+	var hit: Variant = _ray_to_y_plane(origin, dir, _editor_grid._ref_height * 0.5)
+	if hit == null:
+		return
+	var hit_pos: Vector3 = hit
+	var new_x: float = hit_pos.x + _capsule_drag_offset.x
+	var new_z: float = hit_pos.z + _capsule_drag_offset.z
+	_editor_grid.set_ref_position(new_x, new_z)
+
+
+## Intersect a ray with the horizontal plane y = plane_y. Returns Vector3 or null.
+func _ray_to_y_plane(origin: Vector3, dir: Vector3, plane_y: float) -> Variant:
+	if absf(dir.y) < 1e-5:
+		return null
+	var t := (plane_y - origin.y) / dir.y
+	if t < 0.0:
+		return null
+	return origin + dir * t
 
 
 func _on_mode_changed(_mode: EditorToolManager.PrimaryMode) -> void:
@@ -1967,6 +2082,102 @@ func _on_numeric_input_changed(text: String) -> void:
 		_update_status("Ready")
 	else:
 		_update_status("Size: %s  (Tab=next axis, Enter=commit, Esc=cancel)" % text)
+
+
+# ── Mouse-following numeric-size overlay ────────────────────────────────────
+
+func _setup_numeric_overlay() -> void:
+	_numeric_overlay = HBoxContainer.new()
+	_numeric_overlay.add_theme_constant_override("separation", 4)
+	_numeric_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_numeric_overlay.top_level = true
+	_numeric_overlay.visible = false
+	_numeric_overlay.z_index = 100
+
+	# Up to 3 slots (X, Z, Height) — shown/hidden per frame based on state.
+	for i in 3:
+		var box := PanelContainer.new()
+		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.08, 0.08, 0.10, 0.92)
+		sb.border_color = COLOR_OUTLINE
+		sb.set_border_width_all(1)
+		sb.set_corner_radius_all(3)
+		sb.content_margin_left = 6
+		sb.content_margin_right = 6
+		sb.content_margin_top = 2
+		sb.content_margin_bottom = 2
+		box.add_theme_stylebox_override("panel", sb)
+
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		var name_lbl := Label.new()
+		name_lbl.add_theme_color_override("font_color", COLOR_ON_SURFACE_DIM)
+		var val_lbl := Label.new()
+		val_lbl.add_theme_color_override("font_color", COLOR_ON_SURFACE)
+		row.add_child(name_lbl)
+		row.add_child(val_lbl)
+		box.add_child(row)
+		_numeric_overlay.add_child(box)
+
+		_numeric_overlay_boxes.append(box)
+		_numeric_overlay_labels.append(name_lbl)
+		_numeric_overlay_values.append(val_lbl)
+
+	add_child(_numeric_overlay)
+
+
+func _on_numeric_state_changed(mode: String, labels: PackedStringArray, values: PackedStringArray, active_axis: int) -> void:
+	if not _numeric_overlay:
+		return
+	if mode.is_empty() or labels.is_empty():
+		_numeric_overlay.visible = false
+		return
+
+	var active_style := StyleBoxFlat.new()
+	active_style.bg_color = Color(0.18, 0.12, 0.28, 0.95)
+	active_style.border_color = COLOR_PRIMARY
+	active_style.set_border_width_all(2)
+	active_style.set_corner_radius_all(3)
+	active_style.content_margin_left = 6
+	active_style.content_margin_right = 6
+	active_style.content_margin_top = 2
+	active_style.content_margin_bottom = 2
+
+	var idle_style := StyleBoxFlat.new()
+	idle_style.bg_color = Color(0.08, 0.08, 0.10, 0.92)
+	idle_style.border_color = COLOR_OUTLINE
+	idle_style.set_border_width_all(1)
+	idle_style.set_corner_radius_all(3)
+	idle_style.content_margin_left = 6
+	idle_style.content_margin_right = 6
+	idle_style.content_margin_top = 2
+	idle_style.content_margin_bottom = 2
+
+	for i in _numeric_overlay_boxes.size():
+		if i < labels.size():
+			_numeric_overlay_boxes[i].visible = true
+			_numeric_overlay_labels[i].text = "%s:" % labels[i]
+			_numeric_overlay_values[i].text = values[i]
+			_numeric_overlay_boxes[i].add_theme_stylebox_override(
+				"panel", active_style if i == active_axis else idle_style)
+		else:
+			_numeric_overlay_boxes[i].visible = false
+
+	_numeric_overlay.visible = true
+	_update_numeric_overlay_position()
+
+
+func _update_numeric_overlay_position() -> void:
+	if not _numeric_overlay or not _numeric_overlay.visible:
+		return
+	var mouse := get_global_mouse_position()
+	_numeric_overlay.position = mouse + Vector2(16, 16)
+
+
+func _process(_delta: float) -> void:
+	if _numeric_overlay and _numeric_overlay.visible:
+		_update_numeric_overlay_position()
 
 
 func _update_status(text: String) -> void:

@@ -147,6 +147,12 @@ var _numeric_axis: int = 0            ## 0 = first axis (width), 1 = second axis
 var _numeric_active := false          ## True when numeric entry is in progress
 var _numeric_locked: Array[String] = ["", ""]  ## Locked values for display
 signal numeric_input_changed(text: String)
+## Structured numeric entry state for mouse-following overlay.
+## mode: "" when inactive, "xz" for 2D shape, "radius" for circle/polygon, "height" for extrusion.
+## labels: per-axis labels (e.g. ["X","Z"] or ["Height"]).
+## values: per-axis values as strings (current axis shows the in-progress buffer or "_").
+## active_axis: index into labels/values currently being typed.
+signal numeric_state_changed(mode: String, labels: PackedStringArray, values: PackedStringArray, active_axis: int)
 
 
 func initialize(editor_main: VoxelEditorMain, viewport: SubViewport,
@@ -215,6 +221,24 @@ func initialize(editor_main: VoxelEditorMain, viewport: SubViewport,
 		selection.set_positions(positions)
 	undo_manager.on_metadata_restore = func():
 		refresh_metadata_markers()
+
+
+## Early capture of Tab during numeric entry — `_unhandled_input` fires after
+## the Viewport's focus-navigation handling, so Tab would otherwise shift focus
+## away from the viewport.
+func _input(event: InputEvent) -> void:
+	if not (event is InputEventKey) or not event.pressed or event.echo:
+		return
+	var key := event as InputEventKey
+	if not current_shape.active:
+		return
+	# Don't steal keys while a text control is being edited.
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if focus_owner is LineEdit or focus_owner is TextEdit:
+		return
+	if key.keycode == KEY_TAB and _numeric_active:
+		if _handle_numeric_key(key):
+			get_viewport().set_input_as_handled()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -1480,6 +1504,7 @@ func _reset_numeric() -> void:
 func _emit_numeric_status() -> void:
 	if not _numeric_active:
 		numeric_input_changed.emit("")
+		numeric_state_changed.emit("", PackedStringArray(), PackedStringArray(), 0)
 		return
 
 	var axes := _get_plane_axes(current_shape.face_normal)
@@ -1489,22 +1514,48 @@ func _emit_numeric_status() -> void:
 
 	var text := ""
 	var cur := _numeric_input if not _numeric_input.is_empty() else "_"
+
+	var mode := ""
+	var labels := PackedStringArray()
+	var values := PackedStringArray()
+	var active := 0
+
 	if current_shape.in_height_phase():
+		mode = "height"
 		var prefix := ""
 		if not _numeric_locked[0].is_empty():
+			labels.append(u_name)
+			values.append(_numeric_locked[0])
 			prefix = "%s: %s" % [u_name, _numeric_locked[0]]
 			if not _numeric_locked[1].is_empty():
+				labels.append(v_name)
+				values.append(_numeric_locked[1])
 				prefix += "  %s: %s" % [v_name, _numeric_locked[1]]
 			prefix += "  "
+		labels.append("Height")
+		values.append(cur)
+		active = labels.size() - 1
 		text = "%sHeight: %s" % [prefix, cur]
 	elif current_shape is CircleShape:
+		mode = "radius"
+		labels.append("Radius")
+		values.append(cur)
 		text = "Radius: %s" % cur
 	else:
+		mode = "xz"
+		labels.append(u_name)
+		labels.append(v_name)
 		if _numeric_axis == 0:
+			values.append(cur)
+			values.append("_")
 			text = "%s: %s" % [u_name, cur]
 		else:
+			values.append(_numeric_locked[0])
+			values.append(cur)
+			active = 1
 			text = "%s: %s  %s: %s" % [u_name, _numeric_locked[0], v_name, cur]
 	numeric_input_changed.emit(text)
+	numeric_state_changed.emit(mode, labels, values, active)
 
 
 ## Set the active procedural shader from a preset name.
