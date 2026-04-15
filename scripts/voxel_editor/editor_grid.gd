@@ -8,6 +8,7 @@ var _grid_mesh: MeshInstance3D
 var _boundary_mesh: MeshInstance3D
 var _snap_mesh: MeshInstance3D
 var _ref_capsule: MeshInstance3D
+var _floor_mesh: MeshInstance3D
 var _tile_x: int = WFCTileDef.DEFAULT_TILE_X
 var _tile_y: int = WFCTileDef.DEFAULT_TILE_Y
 var _tile_z: int = WFCTileDef.DEFAULT_TILE_Z
@@ -16,12 +17,17 @@ var _snap_center: bool = false
 var _ref_visible := true
 var _ref_height := 32.0  # Capsule total height in voxels
 var _ref_radius := 8.0   # Capsule radius in voxels
+var _ref_pos_x := 0.0    # Capsule position offset along X (voxels)
+var _ref_pos_z := 0.0    # Capsule position offset along Z (voxels)
+var _floor_visible := false
+var _floor_depth := 32.0  # Depth below Y=0 in voxels (default: one player height)
 
 
 func _ready() -> void:
 	_build_floor_grid()
 	_build_boundary()
 	_build_ref_capsule()
+	_build_floor_ghost()
 
 
 ## Rebuild grid and boundary for new tile dimensions.
@@ -38,6 +44,7 @@ func set_tile_size(sx: int, sy: int, sz: int) -> void:
 	_build_floor_grid()
 	_build_boundary()
 	_build_snap_overlay()
+	_build_floor_ghost()
 
 
 ## Update the snap point overlay. Call when snap settings change.
@@ -147,6 +154,49 @@ func set_ref_size(height: float, radius: float) -> void:
 	_build_ref_capsule()
 
 
+## Update reference capsule X/Z position (voxel coords, relative to tile origin).
+func set_ref_position(x: float, z: float) -> void:
+	_ref_pos_x = x
+	_ref_pos_z = z
+	if _ref_capsule:
+		_ref_capsule.position = Vector3(x, _ref_height * 0.5, z)
+
+
+## World-space AABB for hit-testing the capsule as a drag gizmo.
+## Returns AABB() (empty) when the capsule is hidden.
+func get_ref_aabb() -> AABB:
+	if not _ref_visible or _ref_capsule == null:
+		return AABB()
+	var size := Vector3(_ref_radius * 2.0, _ref_height, _ref_radius * 2.0)
+	var origin := Vector3(_ref_pos_x - _ref_radius, 0.0, _ref_pos_z - _ref_radius)
+	return AABB(origin, size)
+
+
+## Highlight the capsule while being dragged / hovered.
+func set_ref_highlight(highlight: bool) -> void:
+	if _ref_capsule == null:
+		return
+	var mesh := _ref_capsule.mesh as CapsuleMesh
+	if mesh == null:
+		return
+	var mat := mesh.material as StandardMaterial3D
+	if mat == null:
+		return
+	mat.albedo_color = Color(0.4, 1.0, 0.6, 0.55) if highlight else Color(0.2, 0.9, 0.4, 0.35)
+
+
+## Toggle Rift Delver floor ghost visibility.
+func set_floor_visible(vis: bool) -> void:
+	_floor_visible = vis
+	_build_floor_ghost()
+
+
+## Set floor ghost depth below Y=0, in voxels, and rebuild.
+func set_floor_depth(d: float) -> void:
+	_floor_depth = d
+	_build_floor_ghost()
+
+
 func _build_ref_capsule() -> void:
 	if _ref_capsule:
 		_ref_capsule.queue_free()
@@ -170,9 +220,77 @@ func _build_ref_capsule() -> void:
 	_ref_capsule = MeshInstance3D.new()
 	_ref_capsule.mesh = capsule
 	_ref_capsule.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	# Place at origin corner, centered vertically so it sits on the floor
-	_ref_capsule.position = Vector3(_ref_radius + 0.5, _ref_height * 0.5, _ref_radius + 0.5)
+	# Default offset: origin corner. User can move it via set_ref_position().
+	if _ref_pos_x == 0.0 and _ref_pos_z == 0.0:
+		_ref_pos_x = _ref_radius + 0.5
+		_ref_pos_z = _ref_radius + 0.5
+	_ref_capsule.position = Vector3(_ref_pos_x, _ref_height * 0.5, _ref_pos_z)
 	add_child(_ref_capsule)
+
+
+func _build_floor_ghost() -> void:
+	if _floor_mesh:
+		_floor_mesh.queue_free()
+		_floor_mesh = null
+
+	if not _floor_visible:
+		return
+
+	var im := ImmediateMesh.new()
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.9, 0.7, 0.2, 0.25)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.no_depth_test = false
+
+	# Show above the floor grid so the user can see the "fill to" height.
+	var y := _floor_depth
+	var w := float(_tile_x)
+	var d := float(_tile_z)
+
+	# Filled quad for the floor plane
+	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES, mat)
+	var face_color := Color(0.9, 0.7, 0.2, 0.15)
+	for v in [
+		Vector3(0, y, 0), Vector3(w, y, 0), Vector3(w, y, d),
+		Vector3(0, y, 0), Vector3(w, y, d), Vector3(0, y, d),
+	]:
+		im.surface_set_color(face_color)
+		im.surface_add_vertex(v)
+	im.surface_end()
+
+	# Outline + grid lines every 16 voxels so depth is readable
+	var line_mat := StandardMaterial3D.new()
+	line_mat.albedo_color = Color(0.9, 0.7, 0.2, 0.6)
+	line_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	line_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	im.surface_begin(Mesh.PRIMITIVE_LINES, line_mat)
+	var line_color := Color(0.9, 0.7, 0.2, 0.6)
+	var sub_color := Color(0.9, 0.7, 0.2, 0.25)
+	var step := 16
+	var x := 0
+	while x <= int(_tile_x):
+		var c := line_color if (x == 0 or x == int(_tile_x)) else sub_color
+		im.surface_set_color(c)
+		im.surface_add_vertex(Vector3(float(x), y, 0.0))
+		im.surface_set_color(c)
+		im.surface_add_vertex(Vector3(float(x), y, d))
+		x += step
+	var z := 0
+	while z <= int(_tile_z):
+		var c := line_color if (z == 0 or z == int(_tile_z)) else sub_color
+		im.surface_set_color(c)
+		im.surface_add_vertex(Vector3(0.0, y, float(z)))
+		im.surface_set_color(c)
+		im.surface_add_vertex(Vector3(w, y, float(z)))
+		z += step
+	im.surface_end()
+
+	_floor_mesh = MeshInstance3D.new()
+	_floor_mesh.mesh = im
+	_floor_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_floor_mesh)
 
 
 func _build_snap_overlay() -> void:
