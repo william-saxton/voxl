@@ -175,17 +175,6 @@ private:
 		return true;
 	}
 
-	// Greedy mesher internals
-	void _greedy_face(const uint8_t *data, int data_size,
-			const PackedColorArray &palette_colors,
-			int ox, int oy, int oz,
-			int axis, int dir,
-			PackedVector3Array &verts, PackedColorArray &colors,
-			PackedVector3Array &normals,
-			int tile_x, int tile_y, int tile_z);
-
-	static Color _resolve_palette_color(const PackedColorArray &palette_colors, uint16_t voxel_id);
-
 	// Arch evaluation — returns true if voxel (x,y,z) is inside the half-torus
 	static bool _eval_arch(int x, int y, int z,
 			const Vector3i &a, const Vector3i &b, double r);

@@ -10,7 +10,7 @@ A Godot 4.6 project with a C++ GDExtension for voxel-based destructible terrain 
 - `scenes/` — Godot scene files (.tscn)
 - `shaders/` — GLSL shaders
 - `bin/` — Compiled native library output (not committed)
-- `addons/` — Third-party Godot plugins (zylann.voxel, CSS theme, world map editor)
+- `addons/` — Third-party Godot plugins (CSS theme, world map editor)
 - `docs/` — Design documents
 
 ## Building

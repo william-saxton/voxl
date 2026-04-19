@@ -7,7 +7,7 @@ const TICK_BUDGET_MS := 16.0
 const MAX_DURATION := 120.0
 
 var _material_sim: MaterialSimulatorNative
-var _voxel_tool: VoxelTool
+var _world: VoxelWorld
 var _player: Node3D
 var _running := false
 var _elapsed := 0.0
@@ -16,10 +16,9 @@ var _escalation_timer := 0.0
 var _spawn_origin := Vector3i.ZERO
 
 
-func initialize(material_sim: MaterialSimulatorNative, terrain: VoxelTerrain, player: Node3D) -> void:
+func initialize(material_sim: MaterialSimulatorNative, world: VoxelWorld, player: Node3D) -> void:
 	_material_sim = material_sim
-	_voxel_tool = terrain.get_voxel_tool()
-	_voxel_tool.channel = VoxelBuffer.CHANNEL_TYPE
+	_world = world
 	_player = player
 
 
@@ -102,7 +101,7 @@ func _spawn_line(fluid_id: int, origin: Vector3i, step: Vector3i, count: int) ->
 	for i in count:
 		var pos := origin + step * i
 		if _can_place(pos):
-			_material_sim.place_fluid(pos, fluid_id)
+			_world.set_voxel(pos, fluid_id)
 
 
 func _spawn_grid_at(fluid_id: int, origin: Vector3i, size: int) -> void:
@@ -110,19 +109,19 @@ func _spawn_grid_at(fluid_id: int, origin: Vector3i, size: int) -> void:
 		for z in size:
 			var pos := origin + Vector3i(x * 3, 0, z * 3)
 			if _can_place(pos):
-				_material_sim.place_fluid(pos, fluid_id)
+				_world.set_voxel(pos, fluid_id)
 
 
 func _spawn_random(fluid_id: int, origin: Vector3i, count: int) -> void:
 	for i in count:
 		var pos := origin + Vector3i(randi_range(-60, 60), 0, randi_range(-60, 60))
 		if _can_place(pos):
-			_material_sim.place_fluid(pos, fluid_id)
+			_world.set_voxel(pos, fluid_id)
 
 
 func _can_place(pos: Vector3i) -> bool:
-	var here := _voxel_tool.get_voxel(pos)
-	var below := _voxel_tool.get_voxel(pos + Vector3i.DOWN)
+	var here := _world.get_voxel(pos)
+	var below := _world.get_voxel(pos + Vector3i.DOWN)
 	return here == MaterialRegistry.AIR and MaterialRegistry.is_solid(below)
 
 

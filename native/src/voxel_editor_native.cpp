@@ -1,4 +1,5 @@
 #include "voxel_editor_native.h"
+#include "voxel_greedy.h"
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/classes/mesh.hpp>
@@ -65,24 +66,6 @@ void VoxelEditorNative::_bind_methods() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Palette color resolution
-// ═══════════════════════════════════════════════════════════════════════════
-
-Color VoxelEditorNative::_resolve_palette_color(const PackedColorArray &palette_colors, uint16_t voxel_id) {
-	if (voxel_id == 0) return Color(0, 0, 0, 0);
-	// Visual variant is high byte — used as palette index
-	int visual = (voxel_id >> 8) & 0xFF;
-	if (visual < palette_colors.size()) {
-		return palette_colors[visual];
-	}
-	// Fallback: hash-based color for unmapped IDs
-	float r = static_cast<float>((voxel_id * 7 + 13) % 256) / 255.0f;
-	float g = static_cast<float>((voxel_id * 31 + 7) % 256) / 255.0f;
-	float b = static_cast<float>((voxel_id * 53 + 29) % 256) / 255.0f;
-	return Color(r, g, b, 1.0f);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // Greedy Chunk Mesher
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -109,7 +92,8 @@ Ref<ArrayMesh> VoxelEditorNative::build_chunk_mesh(
 
 	for (int axis = 0; axis < 3; axis++) {
 		for (int dir = 0; dir < 2; dir++) {
-			_greedy_face(data, data_size, palette_colors, ox, oy, oz, axis, dir,
+			voxl_greedy::build_face_quads<CHUNK_SIZE>(
+					data, data_size, palette_colors, ox, oy, oz, axis, dir,
 					verts, colors, normals, tile_x, tile_y, tile_z);
 		}
 	}
@@ -128,113 +112,6 @@ Ref<ArrayMesh> VoxelEditorNative::build_chunk_mesh(
 	mesh.instantiate();
 	mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
 	return mesh;
-}
-
-void VoxelEditorNative::_greedy_face(const uint8_t *data, int data_size,
-		const PackedColorArray &palette_colors,
-		int ox, int oy, int oz,
-		int axis, int dir,
-		PackedVector3Array &verts, PackedColorArray &colors,
-		PackedVector3Array &normals,
-		int tile_x, int tile_y, int tile_z) {
-
-	Vector3 normal = Vector3(0, 0, 0);
-	normal[axis] = -1.0f + dir * 2.0f;
-
-	int u_axis, v_axis;
-	if (axis == 0) { u_axis = 2; v_axis = 1; }
-	else if (axis == 1) { u_axis = 0; v_axis = 2; }
-	else { u_axis = 0; v_axis = 1; }
-
-	int step = dir == 0 ? -1 : 1;
-	uint16_t mask[CHUNK_SIZE * CHUNK_SIZE];
-
-	for (int d = 0; d < CHUNK_SIZE; d++) {
-		memset(mask, 0, sizeof(mask));
-
-		for (int v = 0; v < CHUNK_SIZE; v++) {
-			for (int u = 0; u < CHUNK_SIZE; u++) {
-				int wx, wy, wz;
-				if (axis == 0) { wx = ox + d; wz = oz + u; wy = oy + v; }
-				else if (axis == 1) { wy = oy + d; wx = ox + u; wz = oz + v; }
-				else { wz = oz + d; wx = ox + u; wy = oy + v; }
-
-				uint16_t voxel = _get_voxel(data, data_size, wx, wy, wz, tile_x, tile_y, tile_z);
-				if (voxel == 0) continue;
-
-				int nx = wx, ny = wy, nz = wz;
-				if (axis == 0) nx += step;
-				else if (axis == 1) ny += step;
-				else nz += step;
-
-				uint16_t neighbor = _get_voxel(data, data_size, nx, ny, nz, tile_x, tile_y, tile_z);
-				if (neighbor == 0) {
-					mask[u + v * CHUNK_SIZE] = voxel;
-				}
-			}
-		}
-
-		// Greedy merge
-		for (int v = 0; v < CHUNK_SIZE; v++) {
-			int u = 0;
-			while (u < CHUNK_SIZE) {
-				uint16_t voxel_id = mask[u + v * CHUNK_SIZE];
-				if (voxel_id == 0) { u++; continue; }
-
-				int w = 1;
-				while (u + w < CHUNK_SIZE && mask[u + w + v * CHUNK_SIZE] == voxel_id) w++;
-
-				int h = 1;
-				bool done = false;
-				while (v + h < CHUNK_SIZE && !done) {
-					for (int k = 0; k < w; k++) {
-						if (mask[u + k + (v + h) * CHUNK_SIZE] != voxel_id) {
-							done = true;
-							break;
-						}
-					}
-					if (!done) h++;
-				}
-
-				// Emit quad
-				Color color = _resolve_palette_color(palette_colors, voxel_id);
-
-				Vector3 corners[4];
-				for (int i = 0; i < 4; i++) {
-					Vector3 corner(0, 0, 0);
-					corner[axis] = static_cast<float>(d + dir);
-					float cu = static_cast<float>(u + (i & 1) * w);
-					float cv = static_cast<float>(v + ((i >> 1) & 1) * h);
-					corner[u_axis] = cu;
-					corner[v_axis] = cv;
-					corners[i] = corner;
-				}
-
-				bool flip = (axis < 2) == (dir == 1);
-
-				if (!flip) {
-					verts.push_back(corners[0]); verts.push_back(corners[1]); verts.push_back(corners[2]);
-					verts.push_back(corners[2]); verts.push_back(corners[1]); verts.push_back(corners[3]);
-				} else {
-					verts.push_back(corners[0]); verts.push_back(corners[2]); verts.push_back(corners[1]);
-					verts.push_back(corners[1]); verts.push_back(corners[2]); verts.push_back(corners[3]);
-				}
-
-				for (int i = 0; i < 6; i++) {
-					colors.push_back(color);
-					normals.push_back(normal);
-				}
-
-				for (int dv = 0; dv < h; dv++) {
-					for (int du = 0; du < w; du++) {
-						mask[u + du + (v + dv) * CHUNK_SIZE] = 0;
-					}
-				}
-
-				u += w;
-			}
-		}
-	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

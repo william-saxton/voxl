@@ -2,7 +2,7 @@ class_name MeasureTool
 extends Node
 
 var _camera: Camera3D
-var _voxel_tool: VoxelTool
+var _world: VoxelWorld
 var _label: Label
 var _line_instance: MeshInstance3D
 
@@ -10,9 +10,8 @@ var _point_a: Vector3i
 var _has_point_a: bool = false
 
 
-func initialize(terrain: VoxelTerrain) -> void:
-	_voxel_tool = terrain.get_voxel_tool()
-	_voxel_tool.channel = VoxelBuffer.CHANNEL_TYPE
+func initialize(world: VoxelWorld) -> void:
+	_world = world
 
 
 func _ready() -> void:
@@ -43,7 +42,7 @@ func _setup_hud() -> void:
 func _setup_line_mesh() -> void:
 	_line_instance = MeshInstance3D.new()
 	_line_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	get_tree().current_scene.add_child(_line_instance)
+	get_tree().current_scene.add_child.call_deferred(_line_instance)
 
 
 func _process(_delta: float) -> void:
@@ -52,7 +51,7 @@ func _process(_delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not _camera or not _voxel_tool:
+	if not _camera or not _world:
 		return
 	if event.is_action_pressed("measure_tool"):
 		_on_measure_pressed()
@@ -60,8 +59,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _on_measure_pressed() -> void:
-	var result := _do_raycast()
-	if not result:
+	var result: Variant = _do_raycast()
+	if result == null:
 		print("Measure: no voxel hit")
 		return
 
@@ -72,7 +71,7 @@ func _on_measure_pressed() -> void:
 		_label.text = "[ MEASURE ]  Point A set: %s\n\nAim at Point B and press M" % [_point_a]
 		print("Measure: Point A = voxel %s" % [_point_a])
 	else:
-		var point_b := result.position
+		var point_b: Vector3i = result.position
 		_has_point_a = false
 		_draw_line(
 			MaterialRegistry.voxel_to_world(_point_a),
@@ -119,8 +118,10 @@ func _clear_line() -> void:
 	_line_instance.mesh = null
 
 
-func _do_raycast() -> VoxelRaycastResult:
+func _do_raycast() -> Variant:
+	if not _world:
+		return null
 	var mouse_pos := get_viewport().get_mouse_position()
 	var ray_origin := _camera.project_ray_origin(mouse_pos)
 	var ray_dir := _camera.project_ray_normal(mouse_pos)
-	return _voxel_tool.raycast(ray_origin, ray_dir, 200.0)
+	return _world.raycast(ray_origin, ray_dir, 200.0)
