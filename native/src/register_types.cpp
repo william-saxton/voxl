@@ -1,7 +1,10 @@
 #include "register_types.h"
+#include "material_palette.h"
 #include "material_simulator_native.h"
-#include "wfc_solver.h"
+#include "voxel_chunk_store.h"
 #include "voxel_editor_native.h"
+#include "voxel_world.h"
+#include "wfc_solver.h"
 
 using namespace godot;
 
@@ -12,6 +15,9 @@ void initialize_voxl_native(ModuleInitializationLevel p_level) {
 	ClassDB::register_class<MaterialSimulatorNative>();
 	ClassDB::register_class<WFCSolver>();
 	ClassDB::register_class<VoxelEditorNative>();
+	ClassDB::register_class<VoxelChunkStore>();
+	ClassDB::register_class<MaterialPalette>();
+	ClassDB::register_class<VoxelWorld>();
 }
 
 void uninitialize_voxl_native(ModuleInitializationLevel p_level) {

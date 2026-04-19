@@ -13,7 +13,7 @@ extends Node3D
 const EXPLODE_GRAVITY := 25.0
 
 var _direction: Vector3
-var _voxel_tool: VoxelTool
+var _world: VoxelWorld
 var _material_sim: MaterialSimulatorNative
 var _age: float = 0.0
 var _dropping := false
@@ -36,8 +36,8 @@ const PULL_INTERVAL := 0.15
 var _pull_radius_voxels: float
 
 
-func initialize(voxel_tool: VoxelTool, material_sim: MaterialSimulatorNative, direction: Vector3) -> void:
-	_voxel_tool = voxel_tool
+func initialize(world: VoxelWorld, material_sim: MaterialSimulatorNative, direction: Vector3) -> void:
+	_world = world
 	_material_sim = material_sim
 	_direction = direction.normalized()
 	_pull_radius_voxels = pull_radius * MaterialRegistry.INV_VOXEL_SCALE
@@ -84,7 +84,7 @@ func _setup_debris_visual() -> void:
 
 
 func _physics_process(delta: float) -> void:
-	if not _voxel_tool:
+	if not _world:
 		return
 
 	_age += delta
@@ -125,15 +125,14 @@ func _pull_nearby_voxels() -> void:
 					continue
 
 				var vpos := center_v + Vector3i(dx, dy, dz)
-				var voxel := _voxel_tool.get_voxel(vpos)
+				var voxel := _world.get_voxel(vpos)
 
 				if voxel == MaterialRegistry.AIR or voxel == MaterialRegistry.BEDROCK:
 					continue
 				if MaterialRegistry.is_gas(voxel):
 					continue
 
-				_voxel_tool.set_voxel(vpos, MaterialRegistry.AIR)
-				_material_sim.sync_voxel(vpos, MaterialRegistry.AIR)
+				_world.set_voxel(vpos, MaterialRegistry.AIR)
 
 				_debris.append({
 					"id": voxel,
@@ -276,31 +275,46 @@ func _resolve_landing(idx: int) -> void:
 
 
 func _place_debris_voxel(voxel_id: int, place_pos: Vector3i) -> void:
-	_voxel_tool.set_voxel(place_pos, voxel_id)
-	_material_sim.sync_voxel(place_pos, voxel_id)
+	_world.set_voxel(place_pos, voxel_id)
 
 
 func _force_place_remaining() -> void:
+	# Collect into flat arrays and submit to VoxelWorld in one FFI call.
+	# Avoids thousands of per-voxel marshalling roundtrips on the death frame.
+	var positions := PackedInt32Array()
+	var values := PackedInt32Array()
+	positions.resize((_debris.size() - _land_cursor) * 3)
+	values.resize(_debris.size() - _land_cursor)
+	var count := 0
 	for i in range(_land_cursor, _debris.size()):
 		_ensure_resolved(i)
 		var d := _debris[i]
 		var lp: Vector3i = d["land_pos"]
-		if lp != Vector3i.ZERO:
-			_place_debris_voxel(d["id"], lp)
+		if lp == Vector3i.ZERO:
+			continue
+		positions[count * 3 + 0] = lp.x
+		positions[count * 3 + 1] = lp.y
+		positions[count * 3 + 2] = lp.z
+		values[count] = d["id"]
+		count += 1
+	if count > 0:
+		positions.resize(count * 3)
+		values.resize(count)
+		_world.set_voxels(positions, values)
 	_debris.clear()
 
 
 func _find_landing_spot(pos: Vector3i) -> Vector3i:
-	# Fast path: flat terrain has dirt at voxel y=0, air at y=1
+	# Fast path: flat terrain has dirt at voxel y=15, air at y=16
 	var ground := Vector3i(pos.x, 15, pos.z)
 	var air := Vector3i(pos.x, 16, pos.z)
-	if MaterialRegistry.is_solid(_voxel_tool.get_voxel(ground)) and MaterialRegistry.is_passable(_voxel_tool.get_voxel(air)):
+	if MaterialRegistry.is_solid(_world.get_voxel(ground)) and MaterialRegistry.is_passable(_world.get_voxel(air)):
 		return air
 
 	for y in range(pos.y + 32, pos.y - 80, -1):
 		var check := Vector3i(pos.x, y, pos.z)
 		var above := Vector3i(pos.x, y + 1, pos.z)
-		if MaterialRegistry.is_solid(_voxel_tool.get_voxel(check)) and MaterialRegistry.is_passable(_voxel_tool.get_voxel(above)):
+		if MaterialRegistry.is_solid(_world.get_voxel(check)) and MaterialRegistry.is_passable(_world.get_voxel(above)):
 			return above
 	return Vector3i.ZERO
 
