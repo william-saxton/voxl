@@ -1179,6 +1179,74 @@ func _update_shape_preview() -> void:
 		var preview: Array[Vector3i] = current_shape.get_surface_preview()
 		_shape_preview.update_surface(_expand_with_symmetry(preview))
 
+	_emit_passive_dimensions()
+
+
+## Emit passive shape dimensions (voxel counts) when numeric input is not active.
+## This shows the user the current shape size as they drag to create it.
+func _emit_passive_dimensions() -> void:
+	if _numeric_active or not current_shape.active:
+		return
+
+	var labels := PackedStringArray()
+	var values := PackedStringArray()
+	var axes := _get_plane_axes(current_shape.face_normal)
+	var axis_names := ["X", "Y", "Z"]
+
+	if current_shape is BoxShape:
+		var box := current_shape as BoxShape
+		var size := Vector3i(
+			absi(box._end.x - box._start.x) + 1,
+			absi(box._end.y - box._start.y) + 1,
+			absi(box._end.z - box._start.z) + 1)
+		if current_shape.in_height_phase():
+			labels.append(axis_names[axes[0]])
+			values.append(str(size[axes[0]]))
+			labels.append(axis_names[axes[1]])
+			values.append(str(size[axes[1]]))
+			labels.append("H")
+			values.append(str(absi(current_shape._height) + 1))
+		else:
+			labels.append(axis_names[axes[0]])
+			values.append(str(size[axes[0]]))
+			labels.append(axis_names[axes[1]])
+			values.append(str(size[axes[1]]))
+	elif current_shape is CircleShape:
+		var circle := current_shape as CircleShape
+		var cu: int = circle._center[circle._plane_u]
+		var cv: int = circle._center[circle._plane_v]
+		var ru: int = circle._radius_pos[circle._plane_u]
+		var rv: int = circle._radius_pos[circle._plane_v]
+		var radius := int(roundf(Vector2(ru - cu, rv - cv).length()))
+		labels.append("R")
+		values.append(str(radius))
+		if current_shape.in_height_phase():
+			labels.append("H")
+			values.append(str(absi(current_shape._height) + 1))
+	elif current_shape is PolygonShape:
+		var poly := current_shape as PolygonShape
+		var cu: int = poly._center[poly._plane_u]
+		var cv: int = poly._center[poly._plane_v]
+		var ru: int = poly._radius_pos[poly._plane_u]
+		var rv: int = poly._radius_pos[poly._plane_v]
+		var radius := int(roundf(Vector2(ru - cu, rv - cv).length()))
+		labels.append("R")
+		values.append(str(radius))
+		if current_shape.in_height_phase():
+			labels.append("H")
+			values.append(str(absi(current_shape._height) + 1))
+	elif current_shape is LineShape:
+		var line := current_shape as LineShape
+		var dx := absi(line._end.x - line._start.x)
+		var dy := absi(line._end.y - line._start.y)
+		var dz := absi(line._end.z - line._start.z)
+		labels.append("L")
+		values.append(str(maxi(dx, maxi(dy, dz)) + 1))
+
+	if labels.is_empty():
+		return
+	# Use active_axis = -1 so no box is highlighted (passive display)
+	numeric_state_changed.emit("info", labels, values, -1)
 
 
 ## Update surface guide markers at the hovered voxel position.
