@@ -229,24 +229,64 @@ static func is_passable(id: int) -> bool:
 	return b == AIR or is_fluid(id) or is_gas(id)
 
 
-static func get_reaction(id_a: int, id_b: int) -> Variant:
-	var key := _pair(id_a & 0xFF, id_b & 0xFF)
+# ══════════════════════════════════════════════════════════════════════════════
+# Centralized reaction table
+# Each entry: { "a": mat_id, "b": mat_id, "result_a": mat_id, "result_b": mat_id }
+# When material A meets material B, A becomes result_a and B becomes result_b.
+# Add new reactions here — they are automatically surfaced in tooltips and
+# available via get_reaction() and get_reactions_for().
+# ══════════════════════════════════════════════════════════════════════════════
 
-	# Universal reactions
-	if key == Vector2i(WATER, LAVA):
-		return {"a": OBSIDIAN, "b": STEAM}
-	if key == Vector2i(WATER, ACID):
-		return {"a": STEAM, "b": STEAM}
-	if key == Vector2i(DIRT, WATER):
-		return {"a": MUD, "b": AIR}
-	if key == Vector2i(SAND, LAVA):
-		return {"a": GLASS, "b": AIR}
-	if key == Vector2i(METAL, ACID):
-		return {"a": RUST, "b": AIR}
-	if key == Vector2i(SALT, ICE):
-		return {"a": AIR, "b": WATER}
-
-	return null
+const _REACTIONS: Array[Dictionary] = [
+	# Universal
+	{ "a": WATER, "b": LAVA, "result_a": OBSIDIAN, "result_b": STEAM },
+	{ "a": WATER, "b": ACID, "result_a": STEAM, "result_b": STEAM },
+	{ "a": DIRT, "b": WATER, "result_a": MUD, "result_b": AIR },
+	{ "a": SAND, "b": LAVA, "result_a": GLASS, "result_b": AIR },
+	{ "a": METAL, "b": ACID, "result_a": RUST, "result_b": AIR },
+	{ "a": SALT, "b": ICE, "result_a": AIR, "result_b": WATER },
+	# Burning
+	{ "a": WOOD, "b": LAVA, "result_a": ASH, "result_b": SMOKE },
+	{ "a": WOOD, "b": EMBER, "result_a": ASH, "result_b": SMOKE },
+	{ "a": WOOD, "b": SPARK, "result_a": ASH, "result_b": SMOKE },
+	{ "a": COAL, "b": LAVA, "result_a": ASH, "result_b": SMOKE },
+	{ "a": COAL, "b": EMBER, "result_a": ASH, "result_b": SMOKE },
+	{ "a": COAL, "b": SPARK, "result_a": ASH, "result_b": SMOKE },
+	{ "a": OIL, "b": LAVA, "result_a": SMOKE, "result_b": EMBER },
+	{ "a": OIL, "b": EMBER, "result_a": SMOKE, "result_b": EMBER },
+	{ "a": OIL, "b": SPARK, "result_a": SMOKE, "result_b": SPARK },
+	{ "a": GUNPOWDER, "b": LAVA, "result_a": STEAM, "result_b": LAVA },
+	{ "a": GUNPOWDER, "b": EMBER, "result_a": STEAM, "result_b": EMBER },
+	{ "a": GUNPOWDER, "b": SPARK, "result_a": STEAM, "result_b": SPARK },
+	{ "a": SULFUR, "b": LAVA, "result_a": TOXIC_GAS, "result_b": LAVA },
+	{ "a": SULFUR, "b": EMBER, "result_a": TOXIC_GAS, "result_b": EMBER },
+	{ "a": VINE, "b": LAVA, "result_a": ASH, "result_b": SMOKE },
+	{ "a": VINE, "b": EMBER, "result_a": ASH, "result_b": SMOKE },
+	{ "a": VINE, "b": SPARK, "result_a": ASH, "result_b": SMOKE },
+	{ "a": COBWEB, "b": LAVA, "result_a": ASH, "result_b": LAVA },
+	{ "a": COBWEB, "b": EMBER, "result_a": ASH, "result_b": EMBER },
+	{ "a": COBWEB, "b": SPARK, "result_a": ASH, "result_b": SPARK },
+	# Melting
+	{ "a": ICE, "b": LAVA, "result_a": WATER, "result_b": LAVA },
+	{ "a": ICE, "b": EMBER, "result_a": WATER, "result_b": EMBER },
+	{ "a": SNOW, "b": LAVA, "result_a": WATER, "result_b": LAVA },
+	{ "a": SNOW, "b": EMBER, "result_a": WATER, "result_b": EMBER },
+	{ "a": METAL, "b": LAVA, "result_a": MOLTEN_METAL, "result_b": LAVA },
+	{ "a": GLASS, "b": LAVA, "result_a": MOLTEN_GLASS, "result_b": LAVA },
+	# Biological
+	{ "a": MEAT, "b": LAVA, "result_a": COOKED_MEAT, "result_b": LAVA },
+	{ "a": MEAT, "b": EMBER, "result_a": COOKED_MEAT, "result_b": EMBER },
+	# Depth-specific
+	{ "a": POISON, "b": WATER, "result_a": TOXIC_GAS, "result_b": TOXIC_GAS },
+	{ "a": MOLTEN_BLOOD, "b": WATER, "result_a": SLAG, "result_b": STEAM },
+	# Magical reactions
+	{ "a": AEGIS_FLUID, "b": VULNERABILITY_SAP, "result_a": AIR, "result_b": AIR },
+	{ "a": GILDING_SOLUTION, "b": ACID, "result_a": AIR, "result_b": ACID },
+	{ "a": GENESIS_FLUID, "b": SALT, "result_a": AIR, "result_b": SALT },
+	{ "a": BLIGHT, "b": SALT, "result_a": AIR, "result_b": SALT },
+	{ "a": POLYMORPHINE, "b": WATER, "result_a": POLYMORPHINE, "result_b": WATER },
+	{ "a": TEMPORAL_FLUID, "b": NULL_GAS, "result_a": AIR, "result_b": NULL_GAS },
+]
 
 
 static func _pair(a: int, b: int) -> Vector2i:
@@ -255,144 +295,238 @@ static func _pair(a: int, b: int) -> Vector2i:
 	return Vector2i(b, a)
 
 
+## Look up the reaction between two materials. Returns null if none.
+## Result dict: { "a": result_for_first, "b": result_for_second }
+static func get_reaction(id_a: int, id_b: int) -> Variant:
+	var a := id_a & 0xFF
+	var b := id_b & 0xFF
+	for r in _REACTIONS:
+		if (r["a"] == a and r["b"] == b):
+			return {"a": r["result_a"], "b": r["result_b"]}
+		if (r["a"] == b and r["b"] == a):
+			return {"a": r["result_b"], "b": r["result_a"]}
+	return null
+
+
+## Get all reactions involving a specific material, with human-readable names.
+## Returns: [{ "with": String, "produces": String }]
+static func get_reactions_for(material_id: int) -> Array[Dictionary]:
+	var mid := material_id & 0xFF
+	var result: Array[Dictionary] = []
+	var seen: Dictionary = {}  # Deduplicate identical display strings
+	for r in _REACTIONS:
+		var entry: Dictionary = {}
+		if r["a"] == mid:
+			entry = {"with": _id_to_name(r["b"]), "produces": _reaction_products(r["result_a"], r["result_b"])}
+		elif r["b"] == mid:
+			entry = {"with": _id_to_name(r["a"]), "produces": _reaction_products(r["result_b"], r["result_a"])}
+		else:
+			continue
+		var key := "%s→%s" % [entry["with"], entry["produces"]]
+		if not seen.has(key):
+			seen[key] = true
+			result.append(entry)
+	return result
+
+
+static func _reaction_products(result_self: int, result_other: int) -> String:
+	var self_name := _id_to_name(result_self)
+	var other_name := _id_to_name(result_other)
+	if result_self == result_other:
+		return self_name
+	return "%s + %s" % [self_name, other_name]
+
+
+static var _name_cache: Dictionary = {}
+
+static func _id_to_name(id: int) -> String:
+	if _name_cache.is_empty():
+		for m in get_all_materials():
+			_name_cache[m["id"]] = m["name"]
+	return _name_cache.get(id, "Unknown")
+
+
+## Build a full tooltip for a material, combining its base tooltip, category,
+## and any reactions from the centralized reaction table.
+static func build_tooltip(mat_info: Dictionary) -> String:
+	var parts: PackedStringArray = []
+	# Category tag
+	var cat: String = mat_info.get("category", "")
+	if cat != "" and cat != "void":
+		parts.append("[%s]" % cat.capitalize())
+	# Base description
+	var tip: String = mat_info.get("tooltip", "")
+	if tip != "":
+		parts.append(tip)
+	# Reactions
+	var reactions := get_reactions_for(mat_info["id"])
+	if not reactions.is_empty():
+		parts.append("Reactions:")
+		for r in reactions:
+			parts.append("  + %s → %s" % [r["with"], r["produces"]])
+	return "\n".join(parts)
+
+
+## Ordered list of material groups for display in the palette panel.
+static func get_material_groups() -> Array[String]:
+	return [
+		"Core",
+		"Universal Terrain",
+		"Structural / Crafted",
+		"Biological",
+		"Depth 1: Biomechanical Jungle",
+		"Depth 2: Crumbling Citadel",
+		"Depth 3: Molten Core",
+		"Depth 4: Clockwork Labyrinth",
+		"Depth 5: Obsidian Core",
+		"Magical — Offensive",
+		"Magical — Utility",
+		"Magical — Exotic",
+		"Contact Damage",
+		"Metals",
+		"Arcane Crystals",
+		"Plants",
+	]
+
+
 ## Returns all registered material types as an array of Dictionaries:
-## [{ id: int, name: String, category: String }]
+## [{ id: int, name: String, category: String, group: String, tooltip: String }]
 static func get_all_materials() -> Array[Dictionary]:
 	return [
 		# Core
-		{ "id": AIR, "name": "Air", "category": "void", "tooltip": "Empty space" },
+		{ "id": AIR, "name": "Air", "category": "void", "group": "Core", "tooltip": "Empty space" },
 		# Universal Terrain
-		{ "id": STONE, "name": "Stone", "category": "solid", "tooltip": "Visual variants for grey, tan, blue-grey, dark" },
-		{ "id": BEDROCK, "name": "Bedrock", "category": "solid", "tooltip": "Indestructible" },
-		{ "id": WATER, "name": "Water", "category": "fluid", "tooltip": "Base liquid. +LAVA=OBSIDIAN+STEAM" },
-		{ "id": DIRT, "name": "Dirt", "category": "solid", "tooltip": "+WATER becomes MUD" },
-		{ "id": MUD, "name": "Mud", "category": "powder", "tooltip": "Soft, falls slowly" },
-		{ "id": LAVA, "name": "Lava", "category": "fluid", "tooltip": "Hot, damages. +WATER=OBSIDIAN+STEAM" },
-		{ "id": ACID, "name": "Acid", "category": "fluid", "tooltip": "Dissolves solids over time. +METAL=RUST" },
-		{ "id": STEAM, "name": "Steam", "category": "gas", "tooltip": "Rises, dissipates. Result of water+heat" },
-		{ "id": SAND, "name": "Sand", "category": "powder", "tooltip": "Falls. +LAVA becomes GLASS" },
-		{ "id": GRAVEL, "name": "Gravel", "category": "powder", "tooltip": "Falls, heavier than sand, no horizontal spread" },
-		{ "id": ICE, "name": "Ice", "category": "solid", "tooltip": "Melts to WATER near heat. SALT melts it" },
-		{ "id": GLASS, "name": "Glass", "category": "solid", "tooltip": "Transparent, fragile" },
-		{ "id": COAL, "name": "Coal", "category": "powder", "tooltip": "Burns to ASH+SMOKE, fuel source" },
-		{ "id": GUNPOWDER, "name": "Gunpowder", "category": "powder", "tooltip": "Explosive chain reaction when ignited" },
-		{ "id": SNOW, "name": "Snow", "category": "powder", "tooltip": "Light, melts to WATER near heat" },
-		{ "id": SALT, "name": "Salt", "category": "powder", "tooltip": "Melts ICE on contact, preserves meat" },
-		{ "id": ASH, "name": "Ash", "category": "powder", "tooltip": "Light, result of burning organic materials" },
-		{ "id": SMOKE, "name": "Smoke", "category": "gas", "tooltip": "Rises, obscures vision. Result of burning" },
-		{ "id": TOXIC_GAS, "name": "Toxic Gas", "category": "gas", "tooltip": "Damages player, heavier than STEAM" },
+		{ "id": STONE, "name": "Stone", "category": "solid", "group": "Universal Terrain", "tooltip": "Visual variants for grey, tan, blue-grey, dark" },
+		{ "id": BEDROCK, "name": "Bedrock", "category": "solid", "group": "Universal Terrain", "tooltip": "Indestructible" },
+		{ "id": WATER, "name": "Water", "category": "fluid", "group": "Universal Terrain", "tooltip": "Base liquid" },
+		{ "id": DIRT, "name": "Dirt", "category": "solid", "group": "Universal Terrain", "tooltip": "Compactable terrain" },
+		{ "id": MUD, "name": "Mud", "category": "powder", "group": "Universal Terrain", "tooltip": "Soft, falls slowly" },
+		{ "id": LAVA, "name": "Lava", "category": "fluid", "group": "Universal Terrain", "tooltip": "Hot, damages entities on contact" },
+		{ "id": ACID, "name": "Acid", "category": "fluid", "group": "Universal Terrain", "tooltip": "Dissolves solids over time" },
+		{ "id": STEAM, "name": "Steam", "category": "gas", "group": "Universal Terrain", "tooltip": "Rises, dissipates. Result of water+heat" },
+		{ "id": SAND, "name": "Sand", "category": "powder", "group": "Universal Terrain", "tooltip": "Falls, granular" },
+		{ "id": GRAVEL, "name": "Gravel", "category": "powder", "group": "Universal Terrain", "tooltip": "Falls, heavier than sand, no horizontal spread" },
+		{ "id": ICE, "name": "Ice", "category": "solid", "group": "Universal Terrain", "tooltip": "Melts near heat sources" },
+		{ "id": GLASS, "name": "Glass", "category": "solid", "group": "Universal Terrain", "tooltip": "Transparent, fragile" },
+		{ "id": COAL, "name": "Coal", "category": "powder", "group": "Universal Terrain", "tooltip": "Fuel source, burns" },
+		{ "id": GUNPOWDER, "name": "Gunpowder", "category": "powder", "group": "Universal Terrain", "tooltip": "Explosive chain reaction when ignited" },
+		{ "id": SNOW, "name": "Snow", "category": "powder", "group": "Universal Terrain", "tooltip": "Light, melts near heat" },
+		{ "id": SALT, "name": "Salt", "category": "powder", "group": "Universal Terrain", "tooltip": "Preserves meat, purifies" },
+		{ "id": ASH, "name": "Ash", "category": "powder", "group": "Universal Terrain", "tooltip": "Light, result of burning organic materials" },
+		{ "id": SMOKE, "name": "Smoke", "category": "gas", "group": "Universal Terrain", "tooltip": "Rises, obscures vision. Result of burning" },
+		{ "id": TOXIC_GAS, "name": "Toxic Gas", "category": "gas", "group": "Universal Terrain", "tooltip": "Damages player, heavier than Steam" },
 		# Structural / Crafted
-		{ "id": WOOD, "name": "Wood", "category": "solid", "tooltip": "Burns to ASH+SMOKE" },
-		{ "id": METAL, "name": "Metal", "category": "solid", "tooltip": "Variants: iron, copper, brass, gold. +ACID=RUST" },
-		{ "id": BRICK, "name": "Brick", "category": "solid", "tooltip": "Variants: red, grey, mossy" },
-		{ "id": MARBLE, "name": "Marble", "category": "solid", "tooltip": "Decorative, Citadel depth material" },
-		{ "id": CRYSTAL, "name": "Crystal", "category": "solid", "tooltip": "Transparent, variants for gem colors" },
-		{ "id": OBSIDIAN, "name": "Obsidian", "category": "solid", "tooltip": "Very hard. LAVA+WATER result" },
-		{ "id": RUST, "name": "Rust", "category": "solid", "tooltip": "Weak. METAL+ACID result" },
-		{ "id": CLAY, "name": "Clay", "category": "solid", "tooltip": "Visual variants: red, grey, white" },
-		# Biological Universal
-		{ "id": BONE, "name": "Bone", "category": "solid", "tooltip": "Structural remains, crumbles to BONE_DUST" },
-		{ "id": BONE_DUST, "name": "Bone Dust", "category": "powder", "tooltip": "Result of BONE breaking" },
-		{ "id": BLOOD, "name": "Blood", "category": "fluid", "tooltip": "Consume: brief HP regen. Flows like water" },
-		{ "id": MEAT, "name": "Meat", "category": "solid", "tooltip": "Consume: small HP. Decays to ROTTEN_MEAT, +heat=COOKED_MEAT" },
-		{ "id": ROTTEN_MEAT, "name": "Rotten Meat", "category": "solid", "tooltip": "Consume: poison. MEAT decays into this over time" },
-		{ "id": COOKED_MEAT, "name": "Cooked Meat", "category": "solid", "tooltip": "Consume: larger HP restore. MEAT+heat result" },
-		{ "id": VOMIT, "name": "Vomit", "category": "fluid", "tooltip": "Result of consuming bad materials. Slippery" },
+		{ "id": WOOD, "name": "Wood", "category": "solid", "group": "Structural / Crafted", "tooltip": "Burnable structural material" },
+		{ "id": METAL, "name": "Metal", "category": "solid", "group": "Structural / Crafted", "tooltip": "Generic metal. Variants: iron, copper, brass, gold" },
+		{ "id": BRICK, "name": "Brick", "category": "solid", "group": "Structural / Crafted", "tooltip": "Variants: red, grey, mossy" },
+		{ "id": MARBLE, "name": "Marble", "category": "solid", "group": "Structural / Crafted", "tooltip": "Decorative, Citadel depth material" },
+		{ "id": CRYSTAL, "name": "Crystal", "category": "solid", "group": "Structural / Crafted", "tooltip": "Transparent, variants for gem colors" },
+		{ "id": OBSIDIAN, "name": "Obsidian", "category": "solid", "group": "Structural / Crafted", "tooltip": "Very hard" },
+		{ "id": RUST, "name": "Rust", "category": "solid", "group": "Structural / Crafted", "tooltip": "Weak, corroded metal" },
+		{ "id": CLAY, "name": "Clay", "category": "solid", "group": "Structural / Crafted", "tooltip": "Visual variants: red, grey, white" },
+		# Biological
+		{ "id": BONE, "name": "Bone", "category": "solid", "group": "Biological", "tooltip": "Structural remains, crumbles to Bone Dust" },
+		{ "id": BONE_DUST, "name": "Bone Dust", "category": "powder", "group": "Biological", "tooltip": "Result of Bone breaking" },
+		{ "id": BLOOD, "name": "Blood", "category": "fluid", "group": "Biological", "tooltip": "Consume: brief HP regen. Flows like water" },
+		{ "id": MEAT, "name": "Meat", "category": "solid", "group": "Biological", "tooltip": "Consume: small HP. Decays over time" },
+		{ "id": ROTTEN_MEAT, "name": "Rotten Meat", "category": "solid", "group": "Biological", "tooltip": "Consume: poison. Meat decays into this over time" },
+		{ "id": COOKED_MEAT, "name": "Cooked Meat", "category": "solid", "group": "Biological", "tooltip": "Consume: larger HP restore" },
+		{ "id": VOMIT, "name": "Vomit", "category": "fluid", "group": "Biological", "tooltip": "Result of consuming bad materials. Slippery" },
 		# Depth 1: Biomechanical Jungle
-		{ "id": BIOMASS, "name": "Biomass", "category": "solid", "tooltip": "Jungle: living organic wall/flesh. Variants: pink, green, purple" },
-		{ "id": CHITIN, "name": "Chitin", "category": "solid", "tooltip": "Jungle: hard insect shell. Spider/fly drops" },
-		{ "id": SAP, "name": "Sap", "category": "fluid", "tooltip": "Jungle: consume for slow regen. Thick, sticky, slows player" },
-		{ "id": SPORE_GAS, "name": "Spore Gas", "category": "gas", "tooltip": "Jungle: consume causes confusion/screen distort. Spawned by fungi" },
-		{ "id": VINE, "name": "Vine", "category": "solid", "tooltip": "Jungle: grows downward from BIOMASS, burnable" },
-		{ "id": MOSS, "name": "Moss", "category": "solid", "tooltip": "Jungle: spreads on STONE near WATER, decorative" },
-		{ "id": POLLEN, "name": "Pollen", "category": "powder", "tooltip": "Jungle: consume causes sneeze (brief stun). Light, floats" },
-		{ "id": NECTAR, "name": "Nectar", "category": "fluid", "tooltip": "Jungle: consume for mana regen boost. Rare, found in flowers" },
+		{ "id": BIOMASS, "name": "Biomass", "category": "solid", "group": "Depth 1: Biomechanical Jungle", "tooltip": "Living organic wall/flesh. Variants: pink, green, purple" },
+		{ "id": CHITIN, "name": "Chitin", "category": "solid", "group": "Depth 1: Biomechanical Jungle", "tooltip": "Hard insect shell. Spider/fly drops" },
+		{ "id": SAP, "name": "Sap", "category": "fluid", "group": "Depth 1: Biomechanical Jungle", "tooltip": "Consume: slow regen. Thick, sticky, slows player" },
+		{ "id": SPORE_GAS, "name": "Spore Gas", "category": "gas", "group": "Depth 1: Biomechanical Jungle", "tooltip": "Consume: confusion/screen distort. Spawned by fungi" },
+		{ "id": VINE, "name": "Vine", "category": "solid", "group": "Depth 1: Biomechanical Jungle", "tooltip": "Grows downward from Biomass, burnable" },
+		{ "id": MOSS, "name": "Moss", "category": "solid", "group": "Depth 1: Biomechanical Jungle", "tooltip": "Spreads on Stone near Water, decorative" },
+		{ "id": POLLEN, "name": "Pollen", "category": "powder", "group": "Depth 1: Biomechanical Jungle", "tooltip": "Consume: sneeze (brief stun). Light, floats" },
+		{ "id": NECTAR, "name": "Nectar", "category": "fluid", "group": "Depth 1: Biomechanical Jungle", "tooltip": "Consume: mana regen boost. Rare, found in flowers" },
 		# Depth 2: Crumbling Citadel
-		{ "id": ARCANE_ICHOR, "name": "Arcane Ichor", "category": "fluid", "tooltip": "Citadel: consume for reduced spell cost. Glowing blue-purple, construct blood" },
-		{ "id": RUBBLE, "name": "Rubble", "category": "powder", "tooltip": "Citadel: falls. Result of destroyed BRICK/MARBLE" },
-		{ "id": DUST, "name": "Dust", "category": "gas", "tooltip": "Citadel: rises slowly, obscures vision" },
-		{ "id": COBWEB, "name": "Cobweb", "category": "solid", "tooltip": "Citadel: weak, burnable, slows player" },
-		{ "id": LICHEN, "name": "Lichen", "category": "solid", "tooltip": "Citadel: spreads on stone surfaces, decorative" },
-		{ "id": ECTOPLASM, "name": "Ectoplasm", "category": "fluid", "tooltip": "Citadel: consume for brief phasing. Ghost/magical creature drops" },
+		{ "id": ARCANE_ICHOR, "name": "Arcane Ichor", "category": "fluid", "group": "Depth 2: Crumbling Citadel", "tooltip": "Consume: reduced spell cost. Glowing blue-purple, construct blood" },
+		{ "id": RUBBLE, "name": "Rubble", "category": "powder", "group": "Depth 2: Crumbling Citadel", "tooltip": "Falls. Result of destroyed Brick/Marble" },
+		{ "id": DUST, "name": "Dust", "category": "gas", "group": "Depth 2: Crumbling Citadel", "tooltip": "Rises slowly, obscures vision" },
+		{ "id": COBWEB, "name": "Cobweb", "category": "solid", "group": "Depth 2: Crumbling Citadel", "tooltip": "Weak, burnable, slows player" },
+		{ "id": LICHEN, "name": "Lichen", "category": "solid", "group": "Depth 2: Crumbling Citadel", "tooltip": "Spreads on stone surfaces, decorative" },
+		{ "id": ECTOPLASM, "name": "Ectoplasm", "category": "fluid", "group": "Depth 2: Crumbling Citadel", "tooltip": "Consume: brief phasing. Ghost/magical creature drops" },
 		# Depth 3: Molten Core
-		{ "id": MAGMA_ROCK, "name": "Magma Rock", "category": "solid", "tooltip": "Molten Core: hot stone with glowing cracks" },
-		{ "id": SLAG, "name": "Slag", "category": "powder", "tooltip": "Molten Core: elemental flesh, crumbles. Metallic hue variants" },
-		{ "id": MOLTEN_METAL, "name": "Molten Metal", "category": "fluid", "tooltip": "Molten Core: cools to METAL, hotter than lava" },
-		{ "id": SULFUR, "name": "Sulfur", "category": "powder", "tooltip": "Molten Core: flammable, +heat becomes TOXIC_GAS" },
-		{ "id": EMBER, "name": "Ember", "category": "powder", "tooltip": "Molten Core: short-lived, glows, ignites flammables, decays to ASH" },
-		{ "id": MOLTEN_BLOOD, "name": "Molten Blood", "category": "fluid", "tooltip": "Molten Core: consume for fire resist + damage boost. Lava elemental drops" },
-		{ "id": ITE_MINERAL, "name": "Ite Mineral", "category": "solid", "tooltip": "Molten Core: crystallized mineral from molten constructs" },
+		{ "id": MAGMA_ROCK, "name": "Magma Rock", "category": "solid", "group": "Depth 3: Molten Core", "tooltip": "Hot stone with glowing cracks" },
+		{ "id": SLAG, "name": "Slag", "category": "powder", "group": "Depth 3: Molten Core", "tooltip": "Elemental flesh, crumbles. Metallic hue variants" },
+		{ "id": MOLTEN_METAL, "name": "Molten Metal", "category": "fluid", "group": "Depth 3: Molten Core", "tooltip": "Cools to Metal, hotter than Lava" },
+		{ "id": SULFUR, "name": "Sulfur", "category": "powder", "group": "Depth 3: Molten Core", "tooltip": "Flammable" },
+		{ "id": EMBER, "name": "Ember", "category": "powder", "group": "Depth 3: Molten Core", "tooltip": "Short-lived, glows, ignites flammables, decays to Ash" },
+		{ "id": MOLTEN_BLOOD, "name": "Molten Blood", "category": "fluid", "group": "Depth 3: Molten Core", "tooltip": "Consume: fire resist + damage boost. Lava elemental drops" },
+		{ "id": ITE_MINERAL, "name": "Ite Mineral", "category": "solid", "group": "Depth 3: Molten Core", "tooltip": "Crystallized mineral from molten constructs" },
 		# Depth 4: Clockwork Labyrinth
-		{ "id": GEAR_BLOCK, "name": "Gear Block", "category": "solid", "tooltip": "Clockwork: mechanical terrain. Variants: copper, brass, steel" },
-		{ "id": CONDUIT, "name": "Conduit", "category": "solid", "tooltip": "Clockwork: energy-transmitting material" },
-		{ "id": OIL, "name": "Oil", "category": "fluid", "tooltip": "Clockwork: consume causes poison + slippery. Flammable, burns to SMOKE" },
-		{ "id": SCRAP_METAL, "name": "Scrap Metal", "category": "powder", "tooltip": "Clockwork: drone/knight drops, falls like gravel" },
-		{ "id": SPARK, "name": "Spark", "category": "gas", "tooltip": "Clockwork: short-lived, ignites OIL/GUNPOWDER/WOOD/SULFUR" },
-		{ "id": COOLANT, "name": "Coolant", "category": "fluid", "tooltip": "Clockwork: consume for attack speed boost. Blue-green liquid" },
-		{ "id": GEAR_FRAGMENT, "name": "Gear Fragment", "category": "powder", "tooltip": "Clockwork: small mechanical bits, clockwork bone equivalent" },
+		{ "id": GEAR_BLOCK, "name": "Gear Block", "category": "solid", "group": "Depth 4: Clockwork Labyrinth", "tooltip": "Mechanical terrain. Variants: copper, brass, steel" },
+		{ "id": CONDUIT, "name": "Conduit", "category": "solid", "group": "Depth 4: Clockwork Labyrinth", "tooltip": "Energy-transmitting material" },
+		{ "id": OIL, "name": "Oil", "category": "fluid", "group": "Depth 4: Clockwork Labyrinth", "tooltip": "Consume: poison + slippery. Flammable" },
+		{ "id": SCRAP_METAL, "name": "Scrap Metal", "category": "powder", "group": "Depth 4: Clockwork Labyrinth", "tooltip": "Drone/knight drops, falls like gravel" },
+		{ "id": SPARK, "name": "Spark", "category": "gas", "group": "Depth 4: Clockwork Labyrinth", "tooltip": "Short-lived, ignites flammables" },
+		{ "id": COOLANT, "name": "Coolant", "category": "fluid", "group": "Depth 4: Clockwork Labyrinth", "tooltip": "Consume: attack speed boost. Blue-green liquid" },
+		{ "id": GEAR_FRAGMENT, "name": "Gear Fragment", "category": "powder", "group": "Depth 4: Clockwork Labyrinth", "tooltip": "Small mechanical bits, clockwork bone equivalent" },
 		# Depth 5: Obsidian Core
-		{ "id": VOID_STONE, "name": "Void Stone", "category": "solid", "tooltip": "Obsidian Core: absorbs light, very hard" },
-		{ "id": RIFT_CRYSTAL, "name": "Rift Crystal", "category": "solid", "tooltip": "Obsidian Core: emits light, shifting color variants" },
-		{ "id": SHADOW_FLUID, "name": "Shadow Fluid", "category": "fluid", "tooltip": "Obsidian Core: consume for brief invisibility. Extinguishes light" },
-		{ "id": NULL_GAS, "name": "Null Gas", "category": "gas", "tooltip": "Obsidian Core: suppresses nearby fluid/gas simulation" },
-		{ "id": CORRUPTED, "name": "Corrupted", "category": "solid", "tooltip": "Obsidian Core: spreads slowly, converts adjacent STONE" },
-		{ "id": VOID_FLESH, "name": "Void Flesh", "category": "solid", "tooltip": "Obsidian Core: consume for random short teleport. Entity projection drops" },
-		{ "id": VOID_BLOOD, "name": "Void Blood", "category": "fluid", "tooltip": "Obsidian Core: consume for massive damage boost + HP drain. Black with purple shimmer" },
+		{ "id": VOID_STONE, "name": "Void Stone", "category": "solid", "group": "Depth 5: Obsidian Core", "tooltip": "Absorbs light, very hard" },
+		{ "id": RIFT_CRYSTAL, "name": "Rift Crystal", "category": "solid", "group": "Depth 5: Obsidian Core", "tooltip": "Emits light, shifting color variants" },
+		{ "id": SHADOW_FLUID, "name": "Shadow Fluid", "category": "fluid", "group": "Depth 5: Obsidian Core", "tooltip": "Consume: brief invisibility. Extinguishes light" },
+		{ "id": NULL_GAS, "name": "Null Gas", "category": "gas", "group": "Depth 5: Obsidian Core", "tooltip": "Suppresses nearby fluid/gas simulation" },
+		{ "id": CORRUPTED, "name": "Corrupted", "category": "solid", "group": "Depth 5: Obsidian Core", "tooltip": "Spreads slowly, converts adjacent Stone" },
+		{ "id": VOID_FLESH, "name": "Void Flesh", "category": "solid", "group": "Depth 5: Obsidian Core", "tooltip": "Consume: random short teleport. Entity projection drops" },
+		{ "id": VOID_BLOOD, "name": "Void Blood", "category": "fluid", "group": "Depth 5: Obsidian Core", "tooltip": "Consume: massive damage boost + HP drain. Black with purple shimmer" },
 		# Magical — Offensive
-		{ "id": BERSERKER_BILE, "name": "Berserker Bile", "category": "fluid", "tooltip": "Stained entity deals more damage but can hurt itself. Red-black viscous" },
-		{ "id": PHEROMONE, "name": "Pheromone", "category": "fluid", "tooltip": "Stained entity's attacks deal 0 dmg; killing hits permanently charm target. Pink-gold" },
-		{ "id": GILDING_SOLUTION, "name": "Gilding Solution", "category": "fluid", "tooltip": "Stained enemies drop increased currency on death. Gold-tinted" },
-		{ "id": VULNERABILITY_SAP, "name": "Vulnerability Sap", "category": "fluid", "tooltip": "Stained entity takes increased damage from all sources. Yellow-green" },
-		{ "id": THORN_EXTRACT, "name": "Thorn Extract", "category": "fluid", "tooltip": "When stained entity takes damage, attacker takes damage back. Crimson" },
-		{ "id": POISON, "name": "Poison", "category": "fluid", "tooltip": "DoT to stained entities. Slower but longer than ACID. Dark green, only hurts living things" },
+		{ "id": BERSERKER_BILE, "name": "Berserker Bile", "category": "fluid", "group": "Magical — Offensive", "tooltip": "Stained entity deals more damage but can hurt itself. Red-black viscous" },
+		{ "id": PHEROMONE, "name": "Pheromone", "category": "fluid", "group": "Magical — Offensive", "tooltip": "Stained entity's attacks deal 0 dmg; killing hits permanently charm target. Pink-gold" },
+		{ "id": GILDING_SOLUTION, "name": "Gilding Solution", "category": "fluid", "group": "Magical — Offensive", "tooltip": "Stained enemies drop increased currency on death. Gold-tinted" },
+		{ "id": VULNERABILITY_SAP, "name": "Vulnerability Sap", "category": "fluid", "group": "Magical — Offensive", "tooltip": "Stained entity takes increased damage from all sources. Yellow-green" },
+		{ "id": THORN_EXTRACT, "name": "Thorn Extract", "category": "fluid", "group": "Magical — Offensive", "tooltip": "When stained entity takes damage, attacker takes damage back. Crimson" },
+		{ "id": POISON, "name": "Poison", "category": "fluid", "group": "Magical — Offensive", "tooltip": "DoT to stained entities. Slower but longer than Acid. Dark green, only hurts living things" },
 		# Magical — Utility
-		{ "id": AMMO_ELIXIR, "name": "Ammo Elixir", "category": "fluid", "tooltip": "Reduces ammo consumed per shot while stained. Bright cyan, rare" },
-		{ "id": QUICKSILVER, "name": "Quicksilver", "category": "fluid", "tooltip": "Increases fire rate while stained. Silvery, mercury-like" },
-		{ "id": HASTE_OIL, "name": "Haste Oil", "category": "fluid", "tooltip": "Increases reload speed while stained. Light golden oil" },
-		{ "id": SWIFTNESS_TONIC, "name": "Swiftness Tonic", "category": "fluid", "tooltip": "Movement speed increase while stained. Pale green" },
-		{ "id": PHASE_FLUID, "name": "Phase Fluid", "category": "fluid", "tooltip": "Entity can pass through solids horizontally. Shimmering translucent, timer-based" },
-		{ "id": AEGIS_FLUID, "name": "Aegis Fluid", "category": "fluid", "tooltip": "Stained entity is immune to all damage. Very rare, short duration. White-gold" },
-		{ "id": VITAE, "name": "Vitae", "category": "fluid", "tooltip": "Heals stained entity over time. Warm amber with soft glow" },
-		{ "id": CONFUSION_MIST, "name": "Confusion Mist", "category": "gas", "tooltip": "Stained entity moves in random directions. Swirling iridescent gas" },
+		{ "id": AMMO_ELIXIR, "name": "Ammo Elixir", "category": "fluid", "group": "Magical — Utility", "tooltip": "Reduces ammo consumed per shot while stained. Bright cyan, rare" },
+		{ "id": QUICKSILVER, "name": "Quicksilver", "category": "fluid", "group": "Magical — Utility", "tooltip": "Increases fire rate while stained. Silvery, mercury-like" },
+		{ "id": HASTE_OIL, "name": "Haste Oil", "category": "fluid", "group": "Magical — Utility", "tooltip": "Increases reload speed while stained. Light golden oil" },
+		{ "id": SWIFTNESS_TONIC, "name": "Swiftness Tonic", "category": "fluid", "group": "Magical — Utility", "tooltip": "Movement speed increase while stained. Pale green" },
+		{ "id": PHASE_FLUID, "name": "Phase Fluid", "category": "fluid", "group": "Magical — Utility", "tooltip": "Entity can pass through solids horizontally. Shimmering translucent, timer-based" },
+		{ "id": AEGIS_FLUID, "name": "Aegis Fluid", "category": "fluid", "group": "Magical — Utility", "tooltip": "Stained entity is immune to all damage. Very rare, short duration. White-gold" },
+		{ "id": VITAE, "name": "Vitae", "category": "fluid", "group": "Magical — Utility", "tooltip": "Heals stained entity over time. Warm amber with soft glow" },
+		{ "id": CONFUSION_MIST, "name": "Confusion Mist", "category": "gas", "group": "Magical — Utility", "tooltip": "Stained entity moves in random directions. Swirling iridescent gas" },
 		# Magical — Exotic
-		{ "id": TEMPORAL_FLUID, "name": "Temporal Fluid", "category": "fluid", "tooltip": "Creates afterimages; on damage, reverts to afterimage position. Deep blue with gold particles" },
-		{ "id": POLYMORPHINE, "name": "Polymorphine", "category": "fluid", "tooltip": "Transforms entity into random enemy from current depth. Purple-green swirling" },
-		{ "id": CHAOTIC_POLYMORPHINE, "name": "Chaotic Polymorphine", "category": "fluid", "tooltip": "Transforms entity into random enemy from ANY depth. Deep purple with rainbow highlights" },
-		{ "id": NANITE_SWARM, "name": "Nanite Swarm", "category": "fluid", "tooltip": "Eats RUST/ROTTEN_MEAT/BONE/RUBBLE, grows in volume. Dark grey metallic, self-limiting" },
-		{ "id": WARP_FLUID, "name": "Warp Fluid", "category": "fluid", "tooltip": "Teleports stained entity to random nearby location periodically. Purple-blue shifting" },
-		{ "id": GENESIS_FLUID, "name": "Genesis Fluid", "category": "fluid", "tooltip": "Spawns small hostile creatures over time, then dissipates. Bioluminescent green" },
-		{ "id": ETHANOL, "name": "Ethanol", "category": "fluid", "tooltip": "Mildly intoxicating: blurs vision, randomizes aim, small damage resist. Amber" },
+		{ "id": TEMPORAL_FLUID, "name": "Temporal Fluid", "category": "fluid", "group": "Magical — Exotic", "tooltip": "Creates afterimages; on damage, reverts to afterimage position. Deep blue with gold particles" },
+		{ "id": POLYMORPHINE, "name": "Polymorphine", "category": "fluid", "group": "Magical — Exotic", "tooltip": "Transforms entity into random enemy from current depth. Purple-green swirling" },
+		{ "id": CHAOTIC_POLYMORPHINE, "name": "Chaotic Polymorphine", "category": "fluid", "group": "Magical — Exotic", "tooltip": "Transforms entity into random enemy from ANY depth. Deep purple with rainbow highlights" },
+		{ "id": NANITE_SWARM, "name": "Nanite Swarm", "category": "fluid", "group": "Magical — Exotic", "tooltip": "Eats Rust/Rotten Meat/Bone/Rubble, grows in volume. Dark grey metallic, self-limiting" },
+		{ "id": WARP_FLUID, "name": "Warp Fluid", "category": "fluid", "group": "Magical — Exotic", "tooltip": "Teleports stained entity to random nearby location periodically. Purple-blue shifting" },
+		{ "id": GENESIS_FLUID, "name": "Genesis Fluid", "category": "fluid", "group": "Magical — Exotic", "tooltip": "Spawns small hostile creatures over time, then dissipates. Bioluminescent green" },
+		{ "id": ETHANOL, "name": "Ethanol", "category": "fluid", "group": "Magical — Exotic", "tooltip": "Mildly intoxicating: blurs vision, randomizes aim, small damage resist. Amber" },
 		# Contact Damage
-		{ "id": CURSED_SLUDGE, "name": "Cursed Sludge", "category": "fluid", "tooltip": "Dark/arcane contact damage, stains persistently. Black-purple ooze" },
-		{ "id": MOLTEN_SLAG, "name": "Molten Slag", "category": "fluid", "tooltip": "Fire contact damage, ignites flammables. Orange-white, heavier/slower than LAVA" },
-		{ "id": BLIGHT, "name": "Blight", "category": "fluid", "tooltip": "Poison contact damage, spreads through organic materials. Black-green, self-propagating" },
-		{ "id": RAZOR_DUST, "name": "Razor Dust", "category": "powder", "tooltip": "Damages entities walking through it. Glittering metallic silver particles" },
+		{ "id": CURSED_SLUDGE, "name": "Cursed Sludge", "category": "fluid", "group": "Contact Damage", "tooltip": "Dark/arcane contact damage, stains persistently. Black-purple ooze" },
+		{ "id": MOLTEN_SLAG, "name": "Molten Slag", "category": "fluid", "group": "Contact Damage", "tooltip": "Fire contact damage, ignites flammables. Orange-white, heavier/slower than Lava" },
+		{ "id": BLIGHT, "name": "Blight", "category": "fluid", "group": "Contact Damage", "tooltip": "Poison contact damage, spreads through organic materials. Black-green, self-propagating" },
+		{ "id": RAZOR_DUST, "name": "Razor Dust", "category": "powder", "group": "Contact Damage", "tooltip": "Damages entities walking through it. Glittering metallic silver particles" },
 		# Metals
-		{ "id": IRON, "name": "Iron", "category": "solid", "tooltip": "Grey, common. Default structural metal. Forge: no modifier" },
-		{ "id": COPPER, "name": "Copper", "category": "solid", "tooltip": "Orange-brown. Forge: Electric Shot (chains through WATER). Jungle/Clockwork" },
-		{ "id": BRASS, "name": "Brass", "category": "solid", "tooltip": "Golden-yellow. Forge: Ricochet. Clockwork primary structural metal" },
-		{ "id": SILVER, "name": "Silver", "category": "solid", "tooltip": "Bright white-grey, rare. Forge: Blessed (bonus vs magical/corrupted)" },
-		{ "id": GOLD, "name": "Gold", "category": "solid", "tooltip": "Bright gold, rare in terrain. Forge: Gilded (more currency drops)" },
-		{ "id": DARK_STEEL, "name": "Dark Steel", "category": "solid", "tooltip": "Near-black. Forge: Piercing (ignores damage resist). Obsidian Core" },
-		{ "id": ARCANE_ALLOY, "name": "Arcane Alloy", "category": "solid", "tooltip": "Blue-tinged with faint glow. Forge: Amplified (chained spell bonus). Citadel" },
-		{ "id": MOLTEN_GLASS, "name": "Molten Glass", "category": "fluid", "tooltip": "Transparent orange. Cools to GLASS. Created when GLASS/SAND meets extreme heat" },
-		# Arcane Crystals — Currency
-		{ "id": CRYSTAL_SHARD, "name": "Crystal Shard", "category": "solid", "tooltip": "Currency (1). Small, dull white-blue. Most common drop" },
-		{ "id": CRYSTAL_AMBER, "name": "Crystal Amber", "category": "solid", "tooltip": "Currency (5). Warm orange glow. Uncommon drop" },
-		{ "id": CRYSTAL_EMERALD, "name": "Crystal Emerald", "category": "solid", "tooltip": "Currency (25). Green with bright glow. Rare, hidden caches" },
-		{ "id": CRYSTAL_RUBY, "name": "Crystal Ruby", "category": "solid", "tooltip": "Currency (100). Deep red, pulsing glow. Very rare, mini-boss drops" },
-		{ "id": CRYSTAL_VOID, "name": "Crystal Void", "category": "solid", "tooltip": "Currency (500). Black crystal with purple core. Extremely rare, Obsidian Core boss drops" },
+		{ "id": IRON, "name": "Iron", "category": "solid", "group": "Metals", "tooltip": "Grey, common. Default structural metal. Forge: no modifier" },
+		{ "id": COPPER, "name": "Copper", "category": "solid", "group": "Metals", "tooltip": "Orange-brown. Forge: Electric Shot (chains through Water). Jungle/Clockwork" },
+		{ "id": BRASS, "name": "Brass", "category": "solid", "group": "Metals", "tooltip": "Golden-yellow. Forge: Ricochet. Clockwork primary structural metal" },
+		{ "id": SILVER, "name": "Silver", "category": "solid", "group": "Metals", "tooltip": "Bright white-grey, rare. Forge: Blessed (bonus vs magical/corrupted)" },
+		{ "id": GOLD, "name": "Gold", "category": "solid", "group": "Metals", "tooltip": "Bright gold, rare in terrain. Forge: Gilded (more currency drops)" },
+		{ "id": DARK_STEEL, "name": "Dark Steel", "category": "solid", "group": "Metals", "tooltip": "Near-black. Forge: Piercing (ignores damage resist). Obsidian Core" },
+		{ "id": ARCANE_ALLOY, "name": "Arcane Alloy", "category": "solid", "group": "Metals", "tooltip": "Blue-tinged with faint glow. Forge: Amplified (chained spell bonus). Citadel" },
+		{ "id": MOLTEN_GLASS, "name": "Molten Glass", "category": "fluid", "group": "Metals", "tooltip": "Transparent orange. Cools to Glass" },
+		# Arcane Crystals
+		{ "id": CRYSTAL_SHARD, "name": "Crystal Shard", "category": "solid", "group": "Arcane Crystals", "tooltip": "Currency (1). Small, dull white-blue. Most common drop" },
+		{ "id": CRYSTAL_AMBER, "name": "Crystal Amber", "category": "solid", "group": "Arcane Crystals", "tooltip": "Currency (5). Warm orange glow. Uncommon drop" },
+		{ "id": CRYSTAL_EMERALD, "name": "Crystal Emerald", "category": "solid", "group": "Arcane Crystals", "tooltip": "Currency (25). Green with bright glow. Rare, hidden caches" },
+		{ "id": CRYSTAL_RUBY, "name": "Crystal Ruby", "category": "solid", "group": "Arcane Crystals", "tooltip": "Currency (100). Deep red, pulsing glow. Very rare, mini-boss drops" },
+		{ "id": CRYSTAL_VOID, "name": "Crystal Void", "category": "solid", "group": "Arcane Crystals", "tooltip": "Currency (500). Black crystal with purple core. Extremely rare, Obsidian Core boss drops" },
 		# Plants
-		{ "id": GRASS, "name": "Grass", "category": "solid", "tooltip": "Decorative. Grows on DIRT near light. Biome visual variants" },
-		{ "id": MUSHROOM, "name": "Mushroom", "category": "solid", "tooltip": "Consume: random minor effect (heal/speed/confusion). Grows in dark on DIRT/MOSS" },
-		{ "id": CACTUS, "name": "Cactus", "category": "solid", "tooltip": "Consume: berserker effect (weaker). Grows on SAND. Contact damage (thorns)" },
-		{ "id": ALOE, "name": "Aloe", "category": "solid", "tooltip": "Consume: healing over time (weaker VITAE). Grows on SAND near WATER" },
-		{ "id": GLOWCAP, "name": "Glowcap", "category": "solid", "tooltip": "Consume: brief night vision. Bioluminescent, emits light. Jungle/Citadel" },
-		{ "id": MANAFRUIT, "name": "Manafruit", "category": "solid", "tooltip": "Consume: mana/ammo regen (weaker AMMO_ELIXIR). Grows on VINE, rare jungle fruit" },
-		{ "id": DRAGON_PEPPER, "name": "Dragon Pepper", "category": "solid", "tooltip": "Consume: polymorph into fire creature (predictable). Grows near LAVA. Rare Molten Core plant" },
-		{ "id": STARFRUIT, "name": "Starfruit", "category": "solid", "tooltip": "Consume: random magical effect at reduced potency. Grows on RIFT_CRYSTAL. Very rare, Obsidian Core" },
-		{ "id": THORNVINE, "name": "Thornvine", "category": "solid", "tooltip": "Consume: thorn effect (weaker). Contact damage. Grows on BRICK/STONE, spreads. Citadel" },
-		{ "id": HEALROOT, "name": "Healroot", "category": "solid", "tooltip": "Consume: moderate HP restore. Grows on DIRT near WATER. Common healing plant" },
+		{ "id": GRASS, "name": "Grass", "category": "solid", "group": "Plants", "tooltip": "Decorative. Grows on Dirt near light. Biome visual variants" },
+		{ "id": MUSHROOM, "name": "Mushroom", "category": "solid", "group": "Plants", "tooltip": "Consume: random minor effect (heal/speed/confusion). Grows in dark on Dirt/Moss" },
+		{ "id": CACTUS, "name": "Cactus", "category": "solid", "group": "Plants", "tooltip": "Consume: berserker effect (weaker). Grows on Sand. Contact damage (thorns)" },
+		{ "id": ALOE, "name": "Aloe", "category": "solid", "group": "Plants", "tooltip": "Consume: healing over time (weaker Vitae). Grows on Sand near Water" },
+		{ "id": GLOWCAP, "name": "Glowcap", "category": "solid", "group": "Plants", "tooltip": "Consume: brief night vision. Bioluminescent, emits light. Jungle/Citadel" },
+		{ "id": MANAFRUIT, "name": "Manafruit", "category": "solid", "group": "Plants", "tooltip": "Consume: mana/ammo regen (weaker Ammo Elixir). Grows on Vine, rare jungle fruit" },
+		{ "id": DRAGON_PEPPER, "name": "Dragon Pepper", "category": "solid", "group": "Plants", "tooltip": "Consume: polymorph into fire creature (predictable). Grows near Lava. Rare Molten Core plant" },
+		{ "id": STARFRUIT, "name": "Starfruit", "category": "solid", "group": "Plants", "tooltip": "Consume: random magical effect at reduced potency. Grows on Rift Crystal. Very rare, Obsidian Core" },
+		{ "id": THORNVINE, "name": "Thornvine", "category": "solid", "group": "Plants", "tooltip": "Consume: thorn effect (weaker). Contact damage. Grows on Brick/Stone, spreads. Citadel" },
+		{ "id": HEALROOT, "name": "Healroot", "category": "solid", "group": "Plants", "tooltip": "Consume: moderate HP restore. Grows on Dirt near Water. Common healing plant" },
 	]
 
 

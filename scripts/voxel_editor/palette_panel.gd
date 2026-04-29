@@ -19,6 +19,7 @@ var _entry_buttons: Array[Button] = []
 var _palette_selector: OptionButton
 var _search_edit: LineEdit
 var _search_text: String = ""
+var _collapsed_groups: Dictionary = {}  ## group_name → bool (true = collapsed)
 
 
 func _ready() -> void:
@@ -125,6 +126,16 @@ func _matches_search(entry_name: String, mat_name: String) -> bool:
 	return lower_entry.contains(_search_text) or lower_mat.contains(_search_text)
 
 
+## Category abbreviation and color for physics type badges.
+static var _CATEGORY_COLORS: Dictionary = {
+	"solid": Color(0.6, 0.6, 0.6),
+	"fluid": Color(0.3, 0.5, 1.0),
+	"powder": Color(0.9, 0.75, 0.4),
+	"gas": Color(0.5, 0.9, 0.5),
+	"void": Color(0.4, 0.4, 0.4),
+}
+
+
 func _rebuild_list() -> void:
 	# Clear existing
 	for child in _list.get_children():
@@ -134,111 +145,184 @@ func _rebuild_list() -> void:
 	if not _palette:
 		return
 
-	# Group entries by base material
-	var groups: Dictionary = {}  # base_material → Array[int] (indices)
+	# Map palette entries by base material → array of palette indices
+	var entries_by_mat: Dictionary = {}  # base_material → Array[int]
 	for i in _palette.entries.size():
 		var entry: PaletteEntry = _palette.entries[i]
 		var base := entry.base_material
-		if not groups.has(base):
-			groups[base] = []
-		groups[base].append(i)
+		if not entries_by_mat.has(base):
+			entries_by_mat[base] = []
+		entries_by_mat[base].append(i)
 
-	# Get all material types from registry so every type is shown
+	# Organize materials into their groups
 	var all_materials := MaterialRegistry.get_all_materials()
-
+	var mats_by_group: Dictionary = {}  # group_name → Array[Dictionary]
 	for mat_info in all_materials:
-		var base_mat: int = mat_info["id"]
-		var mat_name: String = mat_info["name"]
-		var indices: Array = groups.get(base_mat, [])
+		var grp: String = mat_info.get("group", "")
+		if not mats_by_group.has(grp):
+			mats_by_group[grp] = []
+		mats_by_group[grp].append(mat_info)
 
-		# Skip Air group if it only has the reserved entry (index 0)
-		if base_mat == MaterialRegistry.AIR and indices.size() <= 1:
+	# Iterate groups in defined order
+	for group_name in MaterialRegistry.get_material_groups():
+		var group_mats: Array = mats_by_group.get(group_name, [])
+		if group_mats.is_empty():
 			continue
 
-		# Filter entries by search
-		var visible_indices: Array[int] = []
-		for idx: int in indices:
-			var entry: PaletteEntry = _palette.entries[idx]
-			var ename: String = entry.entry_name if entry.entry_name != "" else "Entry %d" % idx
-			if _matches_search(ename, mat_name):
-				visible_indices.append(idx)
+		# Check if the group section name matches the search
+		var group_name_matches: bool = not _search_text.is_empty() and group_name.to_lower().contains(_search_text)
 
-		# Skip entire group if no entries match search
-		if visible_indices.is_empty() and not _search_text.is_empty():
+		# Collect all visible material sub-sections and their entries for this group
+		var group_has_visible := false
+		var group_contents: Array[Dictionary] = []  # [{ mat_info, visible_indices }]
+
+		for mat_info in group_mats:
+			var base_mat: int = mat_info["id"]
+			var mat_name: String = mat_info["name"]
+			var indices: Array = entries_by_mat.get(base_mat, [])
+
+			# Skip Air if it only has the reserved entry (index 0)
+			if base_mat == MaterialRegistry.AIR and indices.size() <= 1:
+				continue
+
+			# Filter entries by search
+			var visible_indices: Array[int] = []
+			if group_name_matches:
+				# Group name matches — show all entries in the group
+				for idx: int in indices:
+					visible_indices.append(idx)
+			else:
+				for idx: int in indices:
+					var entry: PaletteEntry = _palette.entries[idx]
+					var ename: String = entry.entry_name if entry.entry_name != "" else "Entry %d" % idx
+					if _matches_search(ename, mat_name):
+						visible_indices.append(idx)
+
+			if not visible_indices.is_empty() or _search_text.is_empty():
+				group_has_visible = true
+				group_contents.append({"mat_info": mat_info, "visible_indices": visible_indices, "all_indices": indices})
+
+		# Skip entire group if nothing visible while searching
+		if not group_has_visible and not _search_text.is_empty():
 			continue
 
-		# Group header row with material name and "+" button
-		var header_row := HBoxContainer.new()
-		header_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var is_collapsed: bool = _collapsed_groups.get(group_name, false)
+		# Force expand when searching so results are always visible
+		var show_contents: bool = not is_collapsed or not _search_text.is_empty()
 
-		var mat_tooltip: String = mat_info.get("tooltip", "")
+		# ── Group section header (clickable to collapse/expand) ──
+		var section_btn := Button.new()
+		section_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		section_btn.alignment = HORIZONTAL_ALIGNMENT_CENTER
+		var arrow := "▾" if show_contents else "▸"
+		section_btn.text = "%s  %s  %s" % [arrow, group_name, arrow]
+		section_btn.add_theme_color_override("font_color", Color(0.9, 0.8, 0.5))
+		section_btn.flat = true
+		section_btn.tooltip_text = "Click to collapse/expand"
+		var captured_group := group_name
+		section_btn.pressed.connect(func():
+			_collapsed_groups[captured_group] = not _collapsed_groups.get(captured_group, false)
+			_rebuild_list()
+		)
+		_list.add_child(section_btn)
 
-		var group_label := Label.new()
-		group_label.text = "── %s ──" % mat_name
-		group_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		group_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		group_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-		if mat_tooltip != "":
-			group_label.tooltip_text = "%s: %s" % [mat_name, mat_tooltip]
-			group_label.mouse_filter = Control.MOUSE_FILTER_STOP
-		header_row.add_child(group_label)
+		if not show_contents:
+			continue
 
-		var add_btn := Button.new()
-		add_btn.text = "+"
-		add_btn.tooltip_text = "Add %s entry" % mat_name
-		add_btn.custom_minimum_size = Vector2(28, 24)
-		var captured_mat: int = base_mat
-		add_btn.pressed.connect(func(): add_entry_requested.emit(captured_mat))
-		header_row.add_child(add_btn)
+		# ── Group contents container ──
+		var group_container := VBoxContainer.new()
+		group_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_list.add_child(group_container)
 
-		_list.add_child(header_row)
+		# ── Material sub-headers and entries within this group ──
+		for item in group_contents:
+			var mat_info: Dictionary = item["mat_info"]
+			var base_mat: int = mat_info["id"]
+			var mat_name: String = mat_info["name"]
+			var mat_category: String = mat_info.get("category", "")
+			var indices: Array = item["all_indices"]
+			var visible_indices: Array[int] = item["visible_indices"]
 
-		var entries_to_show: Array[int] = []
-		if not _search_text.is_empty():
-			entries_to_show = visible_indices
-		else:
-			for idx: int in indices:
-				entries_to_show.append(idx)
+			# Material header row with name, physics type badge, and "+" button
+			var header_row := HBoxContainer.new()
+			header_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-		for idx in entries_to_show:
-			var entry: PaletteEntry = _palette.entries[idx]
-			var btn := Button.new()
-			btn.custom_minimum_size = Vector2(0, 28)
-			btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			# Physics type badge
+			var badge := Label.new()
+			if mat_category != "" and mat_category != "void":
+				badge.text = "[%s]" % mat_category.substr(0, 1).to_upper()
+				badge.add_theme_color_override("font_color", _CATEGORY_COLORS.get(mat_category, Color.WHITE))
+				badge.tooltip_text = mat_category.capitalize()
+				badge.mouse_filter = Control.MOUSE_FILTER_STOP
+			else:
+				badge.text = "   "
+			badge.custom_minimum_size = Vector2(20, 0)
+			header_row.add_child(badge)
 
-			# Color swatch via a ColorRect in an HBoxContainer
-			var hbox := HBoxContainer.new()
-			hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			var mat_label := Label.new()
+			mat_label.text = "── %s ──" % mat_name
+			mat_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			mat_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			mat_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+			mat_label.tooltip_text = MaterialRegistry.build_tooltip(mat_info)
+			mat_label.mouse_filter = Control.MOUSE_FILTER_STOP
+			header_row.add_child(mat_label)
 
-			var swatch := ColorRect.new()
-			swatch.custom_minimum_size = Vector2(20, 20)
-			swatch.color = entry.color
-			swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			hbox.add_child(swatch)
+			var add_btn := Button.new()
+			add_btn.text = "+"
+			add_btn.tooltip_text = "Add %s entry" % mat_name
+			add_btn.custom_minimum_size = Vector2(28, 24)
+			var captured_mat: int = base_mat
+			add_btn.pressed.connect(func(): add_entry_requested.emit(captured_mat))
+			header_row.add_child(add_btn)
 
-			var lbl := Label.new()
-			lbl.text = " %s" % entry.entry_name if entry.entry_name != "" else " Entry %d" % idx
-			lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			hbox.add_child(lbl)
+			group_container.add_child(header_row)
 
-			btn.add_child(hbox)
+			var entries_to_show: Array[int] = []
+			if not _search_text.is_empty():
+				entries_to_show = visible_indices
+			else:
+				for idx: int in indices:
+					entries_to_show.append(idx)
 
-			var captured_idx: int = idx
-			btn.gui_input.connect(func(event: InputEvent) -> void:
-				if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-					_on_entry_clicked(captured_idx, event.ctrl_pressed)
-					btn.accept_event()
-			)
-			var entry_tip := "%s (ID: %d, base: %s)" % [entry.entry_name, idx, mat_name]
-			if mat_tooltip != "":
-				entry_tip += "\n%s" % mat_tooltip
-			btn.tooltip_text = entry_tip
+			for idx in entries_to_show:
+				var entry: PaletteEntry = _palette.entries[idx]
+				var btn := Button.new()
+				btn.custom_minimum_size = Vector2(0, 28)
+				btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 
-			_list.add_child(btn)
-			# Pad button array to match indices
-			while _entry_buttons.size() <= idx:
-				_entry_buttons.append(null)
-			_entry_buttons[idx] = btn
+				# Color swatch via a ColorRect in an HBoxContainer
+				var hbox := HBoxContainer.new()
+				hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+				var swatch := ColorRect.new()
+				swatch.custom_minimum_size = Vector2(20, 20)
+				swatch.color = entry.color
+				swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				hbox.add_child(swatch)
+
+				var lbl := Label.new()
+				lbl.text = " %s" % entry.entry_name if entry.entry_name != "" else " Entry %d" % idx
+				lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				hbox.add_child(lbl)
+
+				btn.add_child(hbox)
+
+				var captured_idx: int = idx
+				btn.gui_input.connect(func(event: InputEvent) -> void:
+					if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+						_on_entry_clicked(captured_idx, event.ctrl_pressed)
+						btn.accept_event()
+				)
+				var entry_tip := "%s (ID: %d, base: %s)" % [entry.entry_name, idx, mat_name]
+				entry_tip += "\n%s" % MaterialRegistry.build_tooltip(mat_info)
+				btn.tooltip_text = entry_tip
+
+				group_container.add_child(btn)
+				# Pad button array to match indices
+				while _entry_buttons.size() <= idx:
+					_entry_buttons.append(null)
+				_entry_buttons[idx] = btn
 
 	_update_selection()
 
