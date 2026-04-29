@@ -198,21 +198,47 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Read version
+      # The VERSION file holds the major version only (e.g. "0" or "1").
+      # The minor version is auto-bumped: we find the highest existing
+      # v<MAJOR>.<MINOR>.0 tag and increment MINOR by 1. Patch is always 0.
+      # Bump the major manually by editing VERSION when there's a breaking change.
+      - name: Compute next version
         id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(cat VERSION | tr -d '[:space:]')
+          MAJOR=$(cat VERSION | tr -d '[:space:]')
+          if ! [[ "$MAJOR" =~ ^[0-9]+$ ]]; then
+            echo "::error::VERSION file must contain a single integer (the major version). Got: '$MAJOR'"
+            exit 1
+          fi
+          LATEST_MINOR=$(git tag -l "v${MAJOR}.*" \
+            | grep -E "^v${MAJOR}\.[0-9]+\.[0-9]+$" \
+            | sed -E "s/^v${MAJOR}\.([0-9]+)\..*/\1/" \
+            | sort -n \
+            | tail -1)
+          if [ -z "$LATEST_MINOR" ]; then
+            NEXT_MINOR=0
+            echo "No prior v${MAJOR}.*.* tags — starting at v${MAJOR}.0.0"
+          else
+            NEXT_MINOR=$((LATEST_MINOR + 1))
+            echo "Highest prior minor for major ${MAJOR}: ${LATEST_MINOR} — next is ${NEXT_MINOR}"
+          fi
+          VERSION="${MAJOR}.${NEXT_MINOR}.0"
           TAG="v${VERSION}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Version: $TAG"
+          echo "Computed release tag: $TAG"
           if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
-            echo "::error::Release $TAG already exists. Bump the VERSION file before merging."
+            echo "::error::Release $TAG already exists. This shouldn't happen with auto-bump; investigate stale tags before retrying."
             exit 1
           fi
 
