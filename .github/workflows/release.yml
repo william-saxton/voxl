@@ -77,11 +77,19 @@ jobs:
           name: linux-native-lib
           path: bin/libvoxl_native-linux-x86_64.tar.gz
 
+      # Bundle the native .so alongside the executable so the GDExtension
+      # actually loads at runtime. Without this, the editor falls back to the
+      # GDScript implementation. The .gdextension file references the lib at
+      # res://bin/libvoxl_native..., which Godot resolves relative to the
+      # executable, so the staged layout must mirror that path.
       - name: Package Linux build
         run: |
-          cd build
-          chmod +x VOXL.x86_64
-          tar czf VOXL-linux-x86_64.tar.gz VOXL.*
+          chmod +x build/VOXL.x86_64
+          STAGE=build/VOXL-linux-x86_64
+          mkdir -p "$STAGE/bin"
+          find build -maxdepth 1 -name 'VOXL.*' -type f -exec cp {} "$STAGE/" \;
+          cp bin/libvoxl_native.linux.template_release.x86_64.so "$STAGE/bin/"
+          tar czf build/VOXL-linux-x86_64.tar.gz -C build VOXL-linux-x86_64
 
       - uses: actions/upload-artifact@v4
         with:
@@ -181,11 +189,20 @@ jobs:
         if: always()
         run: Get-ChildItem build\ -Recurse -ErrorAction SilentlyContinue
 
+      # Bundle the native .dll alongside VOXL.exe so the GDExtension actually
+      # loads at runtime. Without this, the editor falls back to the GDScript
+      # implementation. The .gdextension file references the lib at
+      # res://bin/libvoxl_native..., which Godot resolves relative to the
+      # executable, so the staged layout must mirror that path.
       - name: Package Windows build
         run: |
-          $files = Get-ChildItem "build\VOXL*"
+          $stage = "build\VOXL-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path "$stage\bin" | Out-Null
+          $files = Get-ChildItem "build\VOXL.*" -File
           if ($files.Count -eq 0) { throw "No build output found" }
-          Compress-Archive -Path $files.FullName -DestinationPath "build\VOXL-windows-x86_64.zip"
+          $files | Copy-Item -Destination "$stage\"
+          Copy-Item "bin\libvoxl_native.windows.template_release.x86_64.dll" -Destination "$stage\bin\"
+          Compress-Archive -Path "$stage" -DestinationPath "build\VOXL-windows-x86_64.zip"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -254,13 +271,16 @@ jobs:
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "VOXL ${{ steps.version.outputs.tag }}" \
             --notes "$(cat <<'EOF'
-          ## Native Library
-          - `libvoxl_native-linux-x86_64.tar.gz` — Linux GDExtension library
-          - `libvoxl_native-windows-x86_64.zip` — Windows GDExtension library
+          ## Editor Builds
+          The editor archives ship with the native GDExtension library bundled in
+          `bin/` next to the executable — extract and run, no separate setup.
+          - `VOXL-linux-x86_64.tar.gz` — Linux editor (extracts to `VOXL-linux-x86_64/`)
+          - `VOXL-windows-x86_64.zip` — Windows editor (extracts to `VOXL-windows-x86_64/`)
 
-          ## Game Builds
-          - `VOXL-linux-x86_64.tar.gz` — Linux game export
-          - `VOXL-windows-x86_64.zip` — Windows game export
+          ## Native Library (standalone)
+          For embedding the GDExtension in another Godot project:
+          - `libvoxl_native-linux-x86_64.tar.gz` — Linux build
+          - `libvoxl_native-windows-x86_64.zip` — Windows build
 
           ## Changes
           PR: #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}
