@@ -1,5 +1,10 @@
 name: Release
 
+# Publishes the libvoxl_native GDExtension as standalone GitHub Release
+# assets. william-saxton/VOXL-Editor consumes these to build editor releases
+# without duplicating the native source. When the game (voxel_world.tscn)
+# is ready to ship, add a separate workflow for that.
+
 on:
   pull_request:
     branches: [main]
@@ -10,7 +15,7 @@ permissions:
   contents: write
 
 jobs:
-  # ── Linux: native lib + Godot export (self-hosted runner) ──────────────
+  # ── Linux: build native lib ──────────────────────────────────────────────
   build-linux:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: [self-hosted, linux, x64]
@@ -18,23 +23,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Cache Godot export templates (Linux)
-        id: cache-templates-linux
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/share/godot/export_templates/4.6.stable
-          key: godot-templates-linux-4.6-stable
-
-      - name: Download Godot export templates
-        if: steps.cache-templates-linux.outputs.cache-hit != 'true'
-        run: |
-          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.6.stable"
-          mkdir -p "$TEMPLATE_DIR"
-          wget -q https://github.com/godotengine/godot-builds/releases/download/4.6-stable/Godot_v4.6-stable_export_templates.tpz -O /tmp/templates.zip
-          unzip -q /tmp/templates.zip -d /tmp/templates-tmp
-          mv /tmp/templates-tmp/templates/* "$TEMPLATE_DIR/"
-          rm -rf /tmp/templates.zip /tmp/templates-tmp
 
       - name: Cache godot-cpp build (Linux)
         id: cache-godotcpp-linux
@@ -61,14 +49,6 @@ jobs:
       - name: Verify native library
         run: test -f bin/libvoxl_native.linux.template_release.x86_64.so
 
-      - name: Import Godot project
-        run: godot --headless --import
-
-      - name: Export Linux build
-        run: |
-          mkdir -p build
-          godot --headless --export-release "Linux" build/VOXL.x86_64
-
       - name: Package Linux native library
         run: tar czf bin/libvoxl_native-linux-x86_64.tar.gz -C bin libvoxl_native.linux.template_release.x86_64.so
 
@@ -77,26 +57,7 @@ jobs:
           name: linux-native-lib
           path: bin/libvoxl_native-linux-x86_64.tar.gz
 
-      # Bundle the native .so alongside the executable so the GDExtension
-      # actually loads at runtime. Without this, the editor falls back to the
-      # GDScript implementation. The .gdextension file references the lib at
-      # res://bin/libvoxl_native..., which Godot resolves relative to the
-      # executable, so the staged layout must mirror that path.
-      - name: Package Linux build
-        run: |
-          chmod +x build/VOXL.x86_64
-          STAGE=build/VOXL-linux-x86_64
-          mkdir -p "$STAGE/bin"
-          find build -maxdepth 1 -name 'VOXL.*' -type f -exec cp {} "$STAGE/" \;
-          cp bin/libvoxl_native.linux.template_release.x86_64.so "$STAGE/bin/"
-          tar czf build/VOXL-linux-x86_64.tar.gz -C build VOXL-linux-x86_64
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-build
-          path: build/VOXL-linux-x86_64.tar.gz
-
-  # ── Windows: cross-compile native lib on Linux, export on Windows ──────
+  # ── Windows: cross-compile native lib on Linux ──────────────────────────
   build-windows-native:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: [self-hosted, linux, x64]
@@ -135,83 +96,9 @@ jobs:
           name: windows-native-lib
           path: bin/libvoxl_native.windows.template_release.x86_64.dll
 
-  build-windows-export:
-    needs: build-windows-native
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-native-lib
-          path: bin
-
-      - name: Cache Godot + templates (Windows)
-        id: cache-godot-windows
-        uses: actions/cache@v4
-        with:
-          path: |
-            godot-bin
-            ~/AppData/Roaming/Godot/export_templates/4.6.stable
-          key: godot-windows-4.6-stable
-
-      - name: Download Godot
-        if: steps.cache-godot-windows.outputs.cache-hit != 'true'
-        run: |
-          $version = "4.6-stable"
-          Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/$version/Godot_v${version}_win64.exe.zip" -OutFile godot.zip
-          Expand-Archive godot.zip -DestinationPath godot-bin
-          Move-Item "godot-bin\Godot_v${version}_win64.exe" "godot-bin\godot.exe"
-
-      - name: Download Godot export templates
-        if: steps.cache-godot-windows.outputs.cache-hit != 'true'
-        run: |
-          $version = "4.6-stable"
-          Invoke-WebRequest -Uri "https://github.com/godotengine/godot-builds/releases/download/$version/Godot_v${version}_export_templates.tpz" -OutFile templates.zip
-          $templateDir = "$env:APPDATA\Godot\export_templates\4.6.stable"
-          New-Item -ItemType Directory -Force -Path $templateDir
-          Expand-Archive templates.zip -DestinationPath templates-tmp
-          Move-Item "templates-tmp\templates\*" $templateDir
-
-      - name: Import Godot project
-        run: godot-bin\godot.exe --headless --import
-
-      - name: Export Windows build
-        run: |
-          New-Item -ItemType Directory -Force -Path build
-          $proc = Start-Process -FilePath "godot-bin\godot.exe" -ArgumentList '--headless --export-release "Windows Desktop" build\VOXL.exe' -Wait -PassThru -NoNewWindow
-          Write-Host "Godot exit code: $($proc.ExitCode)"
-          if ($proc.ExitCode -ne 0) { throw "Godot export failed with exit code $($proc.ExitCode)" }
-          if (!(Test-Path "build\VOXL.exe")) { throw "Export produced no output file" }
-
-      - name: List build output
-        if: always()
-        run: Get-ChildItem build\ -Recurse -ErrorAction SilentlyContinue
-
-      # Bundle the native .dll alongside VOXL.exe so the GDExtension actually
-      # loads at runtime. Without this, the editor falls back to the GDScript
-      # implementation. The .gdextension file references the lib at
-      # res://bin/libvoxl_native..., which Godot resolves relative to the
-      # executable, so the staged layout must mirror that path.
-      - name: Package Windows build
-        run: |
-          $stage = "build\VOXL-windows-x86_64"
-          New-Item -ItemType Directory -Force -Path "$stage\bin" | Out-Null
-          $files = Get-ChildItem "build\VOXL.*" -File
-          if ($files.Count -eq 0) { throw "No build output found" }
-          $files | Copy-Item -Destination "$stage\"
-          Copy-Item "bin\libvoxl_native.windows.template_release.x86_64.dll" -Destination "$stage\bin\"
-          Compress-Archive -Path "$stage" -DestinationPath "build\VOXL-windows-x86_64.zip"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-build
-          path: build/VOXL-windows-x86_64.zip
-
-  # ── Create GitHub Release with all artifacts ──────────────────────────
+  # ── Create GitHub Release with native lib artifacts ─────────────────────
   release:
-    needs: [build-linux, build-windows-export]
+    needs: [build-linux, build-windows-native]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -269,18 +156,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
-            --title "VOXL ${{ steps.version.outputs.tag }}" \
+            --title "libvoxl_native ${{ steps.version.outputs.tag }}" \
             --notes "$(cat <<'EOF'
-          ## Game Builds
-          The game archives ship with the native GDExtension library bundled in
-          `bin/` next to the executable — extract and run, no separate setup.
-          - `VOXL-linux-x86_64.tar.gz` — Linux game (extracts to `VOXL-linux-x86_64/`)
-          - `VOXL-windows-x86_64.zip` — Windows game (extracts to `VOXL-windows-x86_64/`)
+          ## libvoxl_native — GDExtension native library
 
-          ## Native Library (standalone)
-          For embedding the GDExtension in another Godot project (e.g. `voxl-editor`):
+          Built from this repo's `native/` source. Consumed by
+          [`william-saxton/VOXL-Editor`](https://github.com/william-saxton/VOXL-Editor)
+          to build editor releases.
+
           - `libvoxl_native-linux-x86_64.tar.gz` — Linux build
           - `libvoxl_native-windows-x86_64.zip` — Windows build
+
+          Drop the extracted file into your project's `bin/` folder; the
+          `voxl_native.gdextension` manifest references it via
+          `res://bin/libvoxl_native.<platform>.template_release.x86_64.<ext>`.
 
           ## Changes
           PR: #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}
@@ -289,6 +178,4 @@ jobs:
           EOF
           )" \
             artifacts/linux-native-lib/libvoxl_native-linux-x86_64.tar.gz \
-            artifacts/windows-native-lib/libvoxl_native-windows-x86_64.zip \
-            artifacts/linux-build/VOXL-linux-x86_64.tar.gz \
-            artifacts/windows-build/VOXL-windows-x86_64.zip
+            artifacts/windows-native-lib/libvoxl_native-windows-x86_64.zip

@@ -55,7 +55,7 @@ The `voxl-editor` project consumes these in its own CI to build the editor witho
 - `voxl_native.gdextension` — GDExtension manifest mapping platforms to native libs
 - `export_presets.cfg` — Export presets for Windows Desktop + Linux
 - `native/SConstruct` — SCons build script
-- `.github/workflows/release.yml` — Builds game + publishes native lib on PR merge
+- `.github/workflows/release.yml` — Builds + publishes the native lib on PR merge. Does NOT export the Godot game (the game is WIP; add a separate workflow when it's ready to ship).
 
 ## Conventions
 
