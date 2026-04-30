@@ -15,17 +15,13 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 [application]
 
 config/name="VOXL"
-run/main_scene="uid://c1u1mel8khu"
+run/main_scene="uid://cgeyo2alrmwhv"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
-[autoload]
-
-AssetSyncManager="*res://scripts/sync/asset_sync_manager.gd"
-
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/godot-css-theme/plugin.cfg", "res://addons/world_map_editor/plugin.cfg")
+enabled=PackedStringArray()
 
 [input]
 

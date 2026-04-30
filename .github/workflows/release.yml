@@ -271,14 +271,14 @@ jobs:
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "VOXL ${{ steps.version.outputs.tag }}" \
             --notes "$(cat <<'EOF'
-          ## Editor Builds
-          The editor archives ship with the native GDExtension library bundled in
+          ## Game Builds
+          The game archives ship with the native GDExtension library bundled in
           `bin/` next to the executable — extract and run, no separate setup.
-          - `VOXL-linux-x86_64.tar.gz` — Linux editor (extracts to `VOXL-linux-x86_64/`)
-          - `VOXL-windows-x86_64.zip` — Windows editor (extracts to `VOXL-windows-x86_64/`)
+          - `VOXL-linux-x86_64.tar.gz` — Linux game (extracts to `VOXL-linux-x86_64/`)
+          - `VOXL-windows-x86_64.zip` — Windows game (extracts to `VOXL-windows-x86_64/`)
 
           ## Native Library (standalone)
-          For embedding the GDExtension in another Godot project:
+          For embedding the GDExtension in another Godot project (e.g. `voxl-editor`):
           - `libvoxl_native-linux-x86_64.tar.gz` — Linux build
           - `libvoxl_native-windows-x86_64.zip` — Windows build
 

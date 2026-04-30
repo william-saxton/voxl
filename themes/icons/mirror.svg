@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 32 32">
-<polygon fill="white" points="12,22 3,27 3,5 12,10"/>
-<polygon fill="white" points="20,10 29,5 29,27 20,22"/>
-<line x1="16" y1="3" x2="16" y2="6" stroke="white" stroke-width="2" stroke-linecap="round"/>
-<line x1="16" y1="27" x2="16" y2="30" stroke="white" stroke-width="2" stroke-linecap="round"/>
-<line x1="16" y1="15" x2="16" y2="18" stroke="white" stroke-width="2" stroke-linecap="round"/>
-<line x1="16" y1="9" x2="16" y2="12" stroke="white" stroke-width="2" stroke-linecap="round"/>
-<line x1="16" y1="21" x2="16" y2="24" stroke="white" stroke-width="2" stroke-linecap="round"/>
-</svg>
