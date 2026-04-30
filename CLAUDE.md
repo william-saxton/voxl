@@ -15,7 +15,6 @@ The voxel/tile editor lives in a separate sibling project at [`../voxl-editor`](
 - `shaders/` — GLSL shaders for terrain, water, gas, portals
 - `resources/` — fluid material resources
 - `bin/` — Compiled native library output (not committed)
-- `docs/` — Design documents
 
 ## Building
 
